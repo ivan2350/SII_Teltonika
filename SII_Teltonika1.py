@@ -29,7 +29,7 @@ tiempo_ultimo_apagado = None
 # UTILIDADES
 # ---------------------------------------------------
 def log(msg):
-    print(time.strftime("[%Y-%m-%d %H:%M:%S]"), msg)
+    print(time.strftime("[%D-%M-%Y %H:%M:%S]"), msg)
 
 
 def puede_encender():
