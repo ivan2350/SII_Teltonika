@@ -10,13 +10,12 @@ BAUDIOS = 9600
 
 ID_POZO = 31
 ID_TANQUE = 32
-#tiempos
-TIEMPO_ESPERA_CICLO = 60
-TIEMPO_REINTENTO_ERROR = 12
-TIEMPO_REINTENTO_PUERTO = 60
-MAX_ERRORES = 3
 
-RETARDO_MIN_APAGADO = 180  # 3 minutos mínimo apagada
+TIEMPO_ESPERA_CICLO = 120       # Cada cuánto se lee el tanque
+TIEMPO_REINTENTO_ERROR = 10      # Pausa tras error antes de reintentar
+TIEMPO_REINTENTO_PUERTO = 8      # Pausa al reiniciar puerto
+MAX_ERRORES = 3                   # Reintentos antes de apagar
+RETARDO_MIN_APAGADO = 180         # 3 minutos mínimo apagada
 
 # ---------------------------------------------------
 # VARIABLES
@@ -29,15 +28,15 @@ tiempo_ultimo_apagado = None
 # UTILIDADES
 # ---------------------------------------------------
 def log(msg):
-    print(time.strftime("[%M-%D-%A %H:%M:%S]"), msg)
+    print(time.strftime("[%D-%M-%A %H:%M:%S]"), msg)
 
 
 def puede_encender():
+    """Devuelve True si ya pasó el retardo mínimo de bomba apagada"""
     if tiempo_ultimo_apagado is None:
         return True
 
     tiempo_apagada = time.time() - tiempo_ultimo_apagado
-
     if tiempo_apagada < RETARDO_MIN_APAGADO:
         restante = int((RETARDO_MIN_APAGADO - tiempo_apagada) / 60) + 1
         log(f"Bomba en retardo OFF ({restante} min restantes)")
@@ -74,9 +73,7 @@ def reiniciar_conexion(client):
         client.close()
     except:
         pass
-
     time.sleep(TIEMPO_REINTENTO_PUERTO)
-
     client = iniciar_cliente()
     conectar(client)
     return client
@@ -84,7 +81,6 @@ def reiniciar_conexion(client):
 
 def apagar_bomba_seguridad(client):
     global tiempo_ultimo_apagado, ultimo_estado_bomba
-
     try:
         client.write_coil(0, False, device_id=ID_POZO)
         if ultimo_estado_bomba is not False:
@@ -122,6 +118,7 @@ def control_pozo():
             if lectura.isError():
                 raise Exception("Error Modbus lectura tanque")
 
+            # Lectura exitosa → reiniciamos contador de errores
             errores_consecutivos = 0
 
             flotador_bajo = lectura.bits[0]
@@ -131,6 +128,7 @@ def control_pozo():
 
             accion = None
 
+            # TANQUE VACÍO
             if not flotador_bajo and not flotador_alto:
                 if puede_encender():
                     accion = True
@@ -139,14 +137,17 @@ def control_pozo():
                     accion = False
                     log("Tanque vacío pero retardo OFF activo")
 
+            # TANQUE LLENO
             elif flotador_bajo and flotador_alto:
                 accion = False
                 log("Tanque lleno → APAGAR")
 
+            # ERROR FLOTADORES
             elif not flotador_bajo and flotador_alto:
                 accion = False
                 log("Error flotadores → APAGAR")
 
+            # Aplicar acción solo si cambió el estado
             if accion is not None and accion != ultimo_estado_bomba:
                 resp = client.write_coil(0, accion, device_id=ID_POZO)
                 if resp.isError():
@@ -159,19 +160,21 @@ def control_pozo():
 
                 log(f"Bomba {'ENCENDIDA' if accion else 'APAGADA'}")
 
+            # Espera entre ciclos
             time.sleep(TIEMPO_ESPERA_CICLO)
 
         except Exception as e:
             errores_consecutivos += 1
             log(f"ERROR ({errores_consecutivos}/{MAX_ERRORES}): {e}")
 
-            apagar_bomba_seguridad(client)
-
             if errores_consecutivos >= MAX_ERRORES:
+                log("Máximo de errores alcanzado → apagando bomba y reiniciando puerto")
+                apagar_bomba_seguridad(client)
                 client = reiniciar_conexion(client)
                 errores_consecutivos = 0
-
-            time.sleep(TIEMPO_REINTENTO_ERROR)
+            else:
+                log("Error temporal, reintentando sin apagar bomba")
+                time.sleep(TIEMPO_REINTENTO_ERROR)
 
 
 # ---------------------------------------------------
