@@ -29,7 +29,7 @@ tiempo_ultimo_apagado = None
 # UTILIDADES
 # ---------------------------------------------------
 def log(msg):
-    print(time.strftime("[%d-%m-%y %H:%M:%S]"), msg)
+    print(time.strftime("[%Y-%m-%d %H:%M:%S]"), msg)
 
 
 def puede_encender():
@@ -150,4 +150,38 @@ def control_pozo():
                 accion = False
                 log("Error flotadores → APAGAR")
 
-            if accion is not None and accion != ultimo_estado_bom
+            if accion is not None and accion != ultimo_estado_bomba:
+                resp = client.write_coil(0, accion, device_id=ID_POZO)
+                if resp.isError():
+                    raise Exception("Error Modbus escritura pozo")
+
+                ultimo_estado_bomba = accion
+
+                if not accion:
+                    tiempo_ultimo_apagado = time.time()
+
+                log(f"Bomba {'ENCENDIDA' if accion else 'APAGADA'}")
+
+            time.sleep(TIEMPO_ESPERA_CICLO)
+
+        except Exception as e:
+            errores_consecutivos += 1
+            log(f"ERROR ({errores_consecutivos}/{MAX_ERRORES}): {e}")
+
+            apagar_bomba_seguridad(client)
+
+            if errores_consecutivos >= MAX_ERRORES:
+                client = reiniciar_conexion(client)
+                errores_consecutivos = 0
+
+            time.sleep(TIEMPO_REINTENTO_ERROR)
+
+
+# ---------------------------------------------------
+# MAIN
+# ---------------------------------------------------
+if __name__ == "__main__":
+    try:
+        control_pozo()
+    except KeyboardInterrupt:
+        log("Programa detenido por el usuario")
