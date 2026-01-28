@@ -2,6 +2,7 @@
 import time
 from pymodbus.client import ModbusSerialClient
 
+# ---------------- CONFIGURACIÓN ----------------
 PUERTO = "/dev/ttyHS0"
 BAUDIOS = 9600
 
@@ -11,6 +12,7 @@ ID_TANQUE = 32
 TIEMPO_ESPERA_CICLO = 120
 TIEMPO_REINTENTO_ERROR = 10
 MAX_ERRORES = 3
+# -----------------------------------------------
 
 
 def iniciar_cliente():
@@ -33,7 +35,7 @@ def conectar(client):
 
 def apagar_bomba_seguridad(client):
     try:
-        client.write_coil(0, False, unit=ID_POZO)
+        client.write_coil(0, False, slave=ID_POZO)
         print("BOMBA APAGADA (Fail-Safe)")
     except Exception as e:
         print(f"No se pudo apagar bomba: {e}")
@@ -46,37 +48,48 @@ def control_pozo():
     ultimo_estado_bomba = None
     errores_consecutivos = 0
 
-    print("Sistema Pozo-Tanque iniciado")
+    print("\nSistema Pozo-Tanque iniciado\n")
 
     while True:
         try:
+            if not conectar(client):
+                raise Exception("Puerto serial no disponible")
+
             lectura = client.read_discrete_inputs(
                 address=0,
                 count=2,
-                unit=ID_TANQUE
+                slave=ID_TANQUE
             )
 
             if lectura.isError():
-                raise Exception("Error lectura tanque")
+                raise Exception("Error Modbus lectura tanque")
 
             errores_consecutivos = 0
 
             flotador_bajo = lectura.bits[0]
             flotador_alto = lectura.bits[1]
 
+            print(f"Bajo: {flotador_bajo} | Alto: {flotador_alto}")
+
             accion = None
 
             if not flotador_bajo and not flotador_alto:
                 accion = True
+                print("Tanque vacío → ENCENDER bomba")
+
             elif flotador_bajo and flotador_alto:
                 accion = False
+                print("Tanque lleno → APAGAR bomba")
+
             elif not flotador_bajo and flotador_alto:
                 accion = False
+                print("Error flotadores → APAGAR bomba")
 
             if accion is not None and accion != ultimo_estado_bomba:
-                resp = client.write_coil(0, accion, unit=ID_POZO)
+                resp = client.write_coil(0, accion, slave=ID_POZO)
+
                 if resp.isError():
-                    raise Exception("Error escritura pozo")
+                    raise Exception("Error Modbus escritura pozo")
 
                 ultimo_estado_bomba = accion
                 print("Bomba", "ENCENDIDA" if accion else "APAGADA")
@@ -90,7 +103,12 @@ def control_pozo():
             apagar_bomba_seguridad(client)
 
             if errores_consecutivos >= MAX_ERRORES:
-                client.close()
+                print("Reiniciando conexión Modbus...")
+                try:
+                    client.close()
+                except:
+                    pass
+
                 time.sleep(5)
                 client = iniciar_cliente()
                 conectar(client)
@@ -100,4 +118,7 @@ def control_pozo():
 
 
 if __name__ == "__main__":
-    control_pozo()
+    try:
+        control_pozo()
+    except KeyboardInterrupt:
+        print("Programa detenido por el usuario")
