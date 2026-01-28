@@ -11,12 +11,12 @@ BAUDIOS = 9600
 ID_POZO = 31
 ID_TANQUE = 32
 
-TIEMPO_ESPERA_CICLO = 12
-TIEMPO_REINTENTO_ERROR = 1
+TIEMPO_ESPERA_CICLO = 120
+TIEMPO_REINTENTO_ERROR = 10
 TIEMPO_REINTENTO_PUERTO = 8
 MAX_ERRORES = 3
 
-RETARDO_MIN_APAGADO = 30  # 5 minutos mínimo apagada
+RETARDO_MIN_APAGADO = 300  # 5 minutos mínimo apagada
 
 # ---------------------------------------------------
 # VARIABLES
@@ -29,7 +29,7 @@ tiempo_ultimo_apagado = None
 # UTILIDADES
 # ---------------------------------------------------
 def log(msg):
-    print(time.strftime("[%D-%M-%Y %H:%M:%S]"), msg)
+    print(time.strftime("[%Y-%m-%d %H:%M:%S]"), msg)
 
 
 def puede_encender():
@@ -39,7 +39,7 @@ def puede_encender():
     tiempo_apagada = time.time() - tiempo_ultimo_apagado
 
     if tiempo_apagada < RETARDO_MIN_APAGADO:
-        restante = int((RETARDO_MIN_APAGADO - tiempo_apagada) / 6) + 1
+        restante = int((RETARDO_MIN_APAGADO - tiempo_apagada) / 60) + 1
         log(f"Bomba en retardo OFF ({restante} min restantes)")
         return False
 
@@ -87,7 +87,7 @@ def apagar_bomba_seguridad(client):
 
     try:
         client.write_coil(0, False, device_id=ID_POZO)
-        if ultimo_estado_bomba != False:
+        if ultimo_estado_bomba is not False:
             tiempo_ultimo_apagado = time.time()
         ultimo_estado_bomba = False
         log("BOMBA APAGADA (Fail-Safe)")
@@ -131,7 +131,6 @@ def control_pozo():
 
             accion = None
 
-            # TANQUE VACÍO
             if not flotador_bajo and not flotador_alto:
                 if puede_encender():
                     accion = True
@@ -140,12 +139,10 @@ def control_pozo():
                     accion = False
                     log("Tanque vacío pero retardo OFF activo")
 
-            # TANQUE LLENO
             elif flotador_bajo and flotador_alto:
                 accion = False
                 log("Tanque lleno → APAGAR")
 
-            # ERROR FLOTADORES
             elif not flotador_bajo and flotador_alto:
                 accion = False
                 log("Error flotadores → APAGAR")
