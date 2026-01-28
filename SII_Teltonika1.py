@@ -23,8 +23,9 @@ def iniciar_cliente():
     )
 
 
-def leer_entrada(client, direccion):
-    rr = client.read_discrete_inputs(direccion)
+def leer_discreto(client, direccion):
+    client.address = direccion
+    rr = client.read_discrete_inputs()
     if rr.isError():
         raise Exception(f"Error lectura entrada {direccion}")
     return rr.bits[0]
@@ -41,19 +42,9 @@ def control_pozo():
             # ---- LECTURA TANQUE ----
             client.unit_id = ID_TANQUE
 
-            flotador_bajo = leer_entrada(client, 0)
-            flotador_alto = leer_entrada(client, 1)
+            flotador_bajo = leer_discreto(client, 0)
+            flotador_alto = leer_discreto(client, 1)
 
             print(f"Bajo={flotador_bajo} | Alto={flotador_alto}")
 
-            # ---- LÓGICA ----
-            if not flotador_bajo and not flotador_alto:
-                accion = True
-                print("Tanque vacío → ENCENDER bomba")
-            else:
-                accion = False
-                print("Tanque lleno / error → APAGAR bomba")
-
-            # ---- ESCRITURA POZO ----
-            client.unit_id = ID_POZO
-            client.write_coil_
+            if not flotador_bajo and not flo_
