@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-#!/usr/bin/env python3
 import time
 from pymodbus.client import ModbusSerialClient
 
@@ -12,17 +11,18 @@ BAUDIOS = 9600
 ID_POZO = 31
 ID_TANQUE = 32
 
-TIEMPO_ESPERA_CICLO = 12
-TIEMPO_REINTENTO_ERROR = 1
+TIEMPO_ESPERA_CICLO = 120
+TIEMPO_REINTENTO_ERROR = 10
 TIEMPO_REINTENTO_PUERTO = 8
 MAX_ERRORES = 3
 
-RETARDO_REARRANQUE = 30  # 5 minutos después de reconexión
+RETARDO_MIN_APAGADO = 300  # 5 minutos mínimo apagada
 
 # ---------------------------------------------------
-# VARIABLES GLOBALES
+# VARIABLES
 # ---------------------------------------------------
-ultimo_rearranque = None
+ultimo_estado_bomba = None
+tiempo_ultimo_apagado = None
 
 
 # ---------------------------------------------------
@@ -33,15 +33,14 @@ def log(msg):
 
 
 def puede_encender():
-    global ultimo_rearranque
-
-    if ultimo_rearranque is None:
+    if tiempo_ultimo_apagado is None:
         return True
 
-    tiempo = time.time() - ultimo_rearranque
-    if tiempo < RETARDO_REARRANQUE:
-        restante = int((RETARDO_REARRANQUE - tiempo) / 60) + 1
-        log(f"Retardo de rearranque activo ({restante} min)")
+    tiempo_apagada = time.time() - tiempo_ultimo_apagado
+
+    if tiempo_apagada < RETARDO_MIN_APAGADO:
+        restante = int((RETARDO_MIN_APAGADO - tiempo_apagada) / 60) + 1
+        log(f"Bomba en retardo OFF ({restante} min restantes)")
         return False
 
     return True
@@ -70,8 +69,6 @@ def conectar(client):
 
 
 def reiniciar_conexion(client):
-    global ultimo_rearranque
-
     log("Reiniciando puerto serial...")
     try:
         client.close()
@@ -82,16 +79,17 @@ def reiniciar_conexion(client):
 
     client = iniciar_cliente()
     conectar(client)
-
-    ultimo_rearranque = time.time()
-    log("Puerto reconectado → inicia retardo de 5 minutos")
-
     return client
 
 
 def apagar_bomba_seguridad(client):
+    global tiempo_ultimo_apagado, ultimo_estado_bomba
+
     try:
         client.write_coil(0, False, device_id=ID_POZO)
+        if ultimo_estado_bomba != False:
+            tiempo_ultimo_apagado = time.time()
+        ultimo_estado_bomba = False
         log("BOMBA APAGADA (Fail-Safe)")
     except Exception as e:
         log(f"No se pudo apagar bomba: {e}")
@@ -101,10 +99,11 @@ def apagar_bomba_seguridad(client):
 # LÓGICA PRINCIPAL
 # ---------------------------------------------------
 def control_pozo():
+    global ultimo_estado_bomba, tiempo_ultimo_apagado
+
     client = iniciar_cliente()
     conectar(client)
 
-    ultimo_estado_bomba = None
     errores_consecutivos = 0
 
     log("Sistema Pozo-Tanque iniciado")
@@ -139,7 +138,7 @@ def control_pozo():
                     log("Tanque vacío → ENCENDER")
                 else:
                     accion = False
-                    log("Tanque vacío pero en retardo → NO ENCENDER")
+                    log("Tanque vacío pero retardo OFF activo")
 
             # TANQUE LLENO
             elif flotador_bajo and flotador_alto:
@@ -151,35 +150,4 @@ def control_pozo():
                 accion = False
                 log("Error flotadores → APAGAR")
 
-            if accion is not None and accion != ultimo_estado_bomba:
-                resp = client.write_coil(0, accion, device_id=ID_POZO)
-                if resp.isError():
-                    raise Exception("Error Modbus escritura pozo")
-
-                ultimo_estado_bomba = accion
-                log(f"Bomba {'ENCENDIDA' if accion else 'APAGADA'}")
-
-            time.sleep(TIEMPO_ESPERA_CICLO)
-
-        except Exception as e:
-            errores_consecutivos += 1
-            log(f"ERROR ({errores_consecutivos}/{MAX_ERRORES}): {e}")
-
-            apagar_bomba_seguridad(client)
-
-            if errores_consecutivos >= MAX_ERRORES:
-                client = reiniciar_conexion(client)
-                errores_consecutivos = 0
-
-            time.sleep(TIEMPO_REINTENTO_ERROR)
-
-
-# ---------------------------------------------------
-# MAIN
-# ---------------------------------------------------
-if __name__ == "__main__":
-    try:
-        control_pozo()
-    except KeyboardInterrupt:
-        log("Programa detenido por el usuario")
-
+            if accion is not None and accion != ultimo_estado_bom
