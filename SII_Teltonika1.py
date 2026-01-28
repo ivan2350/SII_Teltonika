@@ -11,24 +11,23 @@ BAUDIOS = 9600
 ID_POZO = 31
 ID_TANQUE = 32
 
-TIEMPO_ESPERA_CICLO = 60       # Cada cuánto se lee el tanque
+TIEMPO_ESPERA_CICLO = 120       # Cada cuánto se lee el tanque
 TIEMPO_REINTENTO_ERROR = 10      # Pausa tras error antes de reintentar
 TIEMPO_REINTENTO_PUERTO = 8      # Pausa al reiniciar puerto
 MAX_ERRORES = 3                   # Reintentos antes de apagar
 RETARDO_MIN_APAGADO = 180         # 3 minutos mínimo apagada
 
 # ---------------------------------------------------
-# VARIABLES
+# VARIABLES GLOBALES
 # ---------------------------------------------------
 ultimo_estado_bomba = None
 tiempo_ultimo_apagado = None
-
 
 # ---------------------------------------------------
 # UTILIDADES
 # ---------------------------------------------------
 def log(msg):
-    print(time.strftime("[%D-%M-%A %H:%M:%S]"), msg)
+    print(time.strftime("[%d/%d/%y-%H-%W-%A %H:%M:%S]"), msg)
 
 
 def puede_encender():
@@ -38,12 +37,11 @@ def puede_encender():
 
     tiempo_apagada = time.time() - tiempo_ultimo_apagado
     if tiempo_apagada < RETARDO_MIN_APAGADO:
-        restante = int((RETARDO_MIN_APAGADO - tiempo_apagada) / 60) + 1
-        log(f"Bomba en retardo OFF ({restante} min restantes)")
+        restante = int(RETARDO_MIN_APAGADO - tiempo_apagada)
+        log(f"Bomba en retardo OFF ({restante} s restantes)")
         return False
 
     return True
-
 
 # ---------------------------------------------------
 # MODBUS
@@ -82,14 +80,13 @@ def reiniciar_conexion(client):
 def apagar_bomba_seguridad(client):
     global tiempo_ultimo_apagado, ultimo_estado_bomba
     try:
-        client.write_coil(0, False, device_id=ID_POZO)
-        if ultimo_estado_bomba is not False:
+        if ultimo_estado_bomba != False:
+            client.write_coil(0, False, device_id=ID_POZO)
             tiempo_ultimo_apagado = time.time()
-        ultimo_estado_bomba = False
-        log("BOMBA APAGADA (Fail-Safe)")
+            ultimo_estado_bomba = False
+            log("BOMBA APAGADA (Fail-Safe)")
     except Exception as e:
         log(f"No se pudo apagar bomba: {e}")
-
 
 # ---------------------------------------------------
 # LÓGICA PRINCIPAL
@@ -118,8 +115,7 @@ def control_pozo():
             if lectura.isError():
                 raise Exception("Error Modbus lectura tanque")
 
-            # Lectura exitosa → reiniciamos contador de errores
-            errores_consecutivos = 0
+            errores_consecutivos = 0  # Lectura exitosa → reinicia errores
 
             flotador_bajo = lectura.bits[0]
             flotador_alto = lectura.bits[1]
@@ -153,11 +149,10 @@ def control_pozo():
                 if resp.isError():
                     raise Exception("Error Modbus escritura pozo")
 
-                ultimo_estado_bomba = accion
-
                 if not accion:
                     tiempo_ultimo_apagado = time.time()
 
+                ultimo_estado_bomba = accion
                 log(f"Bomba {'ENCENDIDA' if accion else 'APAGADA'}")
 
             # Espera entre ciclos
@@ -175,7 +170,6 @@ def control_pozo():
             else:
                 log("Error temporal, reintentando sin apagar bomba")
                 time.sleep(TIEMPO_REINTENTO_ERROR)
-
 
 # ---------------------------------------------------
 # MAIN
