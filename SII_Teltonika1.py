@@ -12,12 +12,12 @@ BAUDIOS = 9600
 ID_POZO = 31
 ID_TANQUE = 32
 
-TIEMPO_ESPERA_CICLO = 120
-TIEMPO_REINTENTO_ERROR = 10
+TIEMPO_ESPERA_CICLO = 12
+TIEMPO_REINTENTO_ERROR = 1
 TIEMPO_REINTENTO_PUERTO = 8
 MAX_ERRORES = 3
 
-RETARDO_REARRANQUE = 300  # 5 minutos después de reconexión
+RETARDO_REARRANQUE = 30  # 5 minutos después de reconexión
 
 # ---------------------------------------------------
 # VARIABLES GLOBALES
