@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
+#!/usr/bin/env python3
 import time
 from pymodbus.client import ModbusSerialClient
 
+# ---------------------------------------------------
+# CONFIGURACIÓN
+# ---------------------------------------------------
 PUERTO = "/dev/ttyHS0"
 BAUDIOS = 9600
 
@@ -10,96 +14,172 @@ ID_TANQUE = 32
 
 TIEMPO_ESPERA_CICLO = 120
 TIEMPO_REINTENTO_ERROR = 10
+TIEMPO_REINTENTO_PUERTO = 8
 MAX_ERRORES = 3
 
+RETARDO_REARRANQUE = 300  # 5 minutos después de reconexión
 
+# ---------------------------------------------------
+# VARIABLES GLOBALES
+# ---------------------------------------------------
+ultimo_rearranque = None
+
+
+# ---------------------------------------------------
+# UTILIDADES
+# ---------------------------------------------------
+def log(msg):
+    print(time.strftime("[%Y-%m-%d %H:%M:%S]"), msg)
+
+
+def puede_encender():
+    global ultimo_rearranque
+
+    if ultimo_rearranque is None:
+        return True
+
+    tiempo = time.time() - ultimo_rearranque
+    if tiempo < RETARDO_REARRANQUE:
+        restante = int((RETARDO_REARRANQUE - tiempo) / 60) + 1
+        log(f"Retardo de rearranque activo ({restante} min)")
+        return False
+
+    return True
+
+
+# ---------------------------------------------------
+# MODBUS
+# ---------------------------------------------------
 def iniciar_cliente():
     return ModbusSerialClient(
         port=PUERTO,
         baudrate=BAUDIOS,
         bytesize=8,
-        parity="N",
+        parity='N',
         stopbits=1,
-        timeout=2
+        timeout=2,
+        retries=3
     )
+
+
+def conectar(client):
+    if not client.connected:
+        log("Conectando puerto Modbus...")
+        return client.connect()
+    return True
+
+
+def reiniciar_conexion(client):
+    global ultimo_rearranque
+
+    log("Reiniciando puerto serial...")
+    try:
+        client.close()
+    except:
+        pass
+
+    time.sleep(TIEMPO_REINTENTO_PUERTO)
+
+    client = iniciar_cliente()
+    conectar(client)
+
+    ultimo_rearranque = time.time()
+    log("Puerto reconectado → inicia retardo de 5 minutos")
+
+    return client
 
 
 def apagar_bomba_seguridad(client):
     try:
         client.write_coil(0, False, device_id=ID_POZO)
-        print("BOMBA APAGADA (Fail-Safe)")
+        log("BOMBA APAGADA (Fail-Safe)")
     except Exception as e:
-        print("No se pudo apagar bomba:", e)
+        log(f"No se pudo apagar bomba: {e}")
 
 
+# ---------------------------------------------------
+# LÓGICA PRINCIPAL
+# ---------------------------------------------------
 def control_pozo():
     client = iniciar_cliente()
-    client.connect()
+    conectar(client)
 
+    ultimo_estado_bomba = None
     errores_consecutivos = 0
-    ultimo_estado = None
 
-    print("\nSistema Pozo-Tanque iniciado\n")
+    log("Sistema Pozo-Tanque iniciado")
 
     while True:
         try:
-            # ---- LECTURA TANQUE ----
-            rr = client.read_discrete_inputs(
+            if not conectar(client):
+                raise Exception("Puerto serial no disponible")
+
+            lectura = client.read_discrete_inputs(
                 0,
                 count=2,
                 device_id=ID_TANQUE
             )
 
-            if rr.isError():
-                raise Exception("Error lectura tanque")
+            if lectura.isError():
+                raise Exception("Error Modbus lectura tanque")
 
             errores_consecutivos = 0
 
-            flotador_bajo = rr.bits[0]
-            flotador_alto = rr.bits[1]
+            flotador_bajo = lectura.bits[0]
+            flotador_alto = lectura.bits[1]
 
-            print(f"Bajo={flotador_bajo} | Alto={flotador_alto}")
+            log(f"Flotadores → Bajo: {flotador_bajo} | Alto: {flotador_alto}")
 
-            # ---- LÓGICA ----
+            accion = None
+
+            # TANQUE VACÍO
             if not flotador_bajo and not flotador_alto:
-                accion = True
-                print("Tanque vacío → ENCENDER bomba")
-            else:
+                if puede_encender():
+                    accion = True
+                    log("Tanque vacío → ENCENDER")
+                else:
+                    accion = False
+                    log("Tanque vacío pero en retardo → NO ENCENDER")
+
+            # TANQUE LLENO
+            elif flotador_bajo and flotador_alto:
                 accion = False
-                print("Tanque lleno / error → APAGAR bomba")
+                log("Tanque lleno → APAGAR")
 
-            # ---- ESCRITURA POZO ----
-            if accion != ultimo_estado:
-                wr = client.write_coil(
-                    0,
-                    accion,
-                    device_id=ID_POZO
-                )
+            # ERROR FLOTADORES
+            elif not flotador_bajo and flotador_alto:
+                accion = False
+                log("Error flotadores → APAGAR")
 
-                if wr.isError():
-                    raise Exception("Error escritura pozo")
+            if accion is not None and accion != ultimo_estado_bomba:
+                resp = client.write_coil(0, accion, device_id=ID_POZO)
+                if resp.isError():
+                    raise Exception("Error Modbus escritura pozo")
 
-                ultimo_estado = accion
-                print("Bomba", "ENCENDIDA" if accion else "APAGADA")
+                ultimo_estado_bomba = accion
+                log(f"Bomba {'ENCENDIDA' if accion else 'APAGADA'}")
 
             time.sleep(TIEMPO_ESPERA_CICLO)
 
         except Exception as e:
             errores_consecutivos += 1
-            print(f"ERROR ({errores_consecutivos}/{MAX_ERRORES}):", e)
+            log(f"ERROR ({errores_consecutivos}/{MAX_ERRORES}): {e}")
 
             apagar_bomba_seguridad(client)
 
             if errores_consecutivos >= MAX_ERRORES:
-                print("Reiniciando conexión Modbus...")
-                client.close()
-                time.sleep(5)
-                client = iniciar_cliente()
-                client.connect()
+                client = reiniciar_conexion(client)
                 errores_consecutivos = 0
 
             time.sleep(TIEMPO_REINTENTO_ERROR)
 
 
+# ---------------------------------------------------
+# MAIN
+# ---------------------------------------------------
 if __name__ == "__main__":
-    control_pozo()
+    try:
+        control_pozo()
+    except KeyboardInterrupt:
+        log("Programa detenido por el usuario")
+
