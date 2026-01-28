@@ -126,12 +126,17 @@ def control_pozo():
 
             # TANQUE VACÍO
             if not flotador_bajo and not flotador_alto:
-                if puede_encender():
-                    accion = True
-                    log("Tanque vacío → ENCENDER")
+                if ultimo_estado_bomba is True:
+                    # Bomba ya encendida → no hacemos nada
+                    log("Tanque vacío → Bomba ya encendida, sin cambios")
+                    accion = True  # mantenemos estado actual
                 else:
-                    accion = False
-                    log("Tanque vacío pero retardo OFF activo")
+                    if puede_encender():
+                        accion = True
+                        log("Tanque vacío → ENCENDER")
+                    else:
+                        accion = False
+                        log("Tanque vacío pero retardo OFF activo")
 
             # TANQUE LLENO
             elif flotador_bajo and flotador_alto:
@@ -183,4 +188,4 @@ if __name__ == "__main__":
         control_pozo()
     except KeyboardInterrupt:
         log("Programa detenido por el usuario")
-
+        
