@@ -2,7 +2,6 @@
 import time
 from pymodbus.client import ModbusSerialClient
 
-# ---------------- CONFIGURACIÓN ----------------
 PUERTO = "/dev/ttyHS0"
 BAUDIOS = 9600
 
@@ -12,11 +11,10 @@ ID_TANQUE = 32
 TIEMPO_ESPERA_CICLO = 120
 TIEMPO_REINTENTO_ERROR = 10
 MAX_ERRORES = 3
-# -----------------------------------------------
 
 
 def iniciar_cliente():
-    client = ModbusSerialClient(
+    return ModbusSerialClient(
         port=PUERTO,
         baudrate=BAUDIOS,
         bytesize=8,
@@ -24,53 +22,50 @@ def iniciar_cliente():
         stopbits=1,
         timeout=2
     )
-    return client
-
-
-def conectar(client):
-    if not client.connected:
-        print("Conectando puerto Modbus...")
-        return client.connect()
-    return True
-
-
-def apagar_bomba_seguridad(client):
-    try:
-        client.unit_id = ID_POZO
-        client.write_coil(0, False)
-        print("BOMBA APAGADA (Fail-Safe)")
-    except Exception as e:
-        print(f"No se pudo apagar bomba: {e}")
 
 
 def control_pozo():
     client = iniciar_cliente()
-    conectar(client)
-
-    ultimo_estado_bomba = None
-    errores_consecutivos = 0
+    client.connect()
 
     print("\nSistema Pozo-Tanque iniciado\n")
 
     while True:
         try:
-            if not conectar(client):
-                raise Exception("Puerto serial no disponible")
-
             # ---- LECTURA TANQUE ----
             client.unit_id = ID_TANQUE
-            lectura = client.read_discrete_inputs(0, 2)
+            rr = client.read_discrete_inputs(0, 2)
 
-            if lectura.isError():
-                raise Exception("Error Modbus lectura tanque")
+            if rr.isError():
+                raise Exception("Error lectura tanque")
 
-            errores_consecutivos = 0
+            bajo = rr.bits[0]
+            alto = rr.bits[1]
 
-            flotador_bajo = lectura.bits[0]
-            flotador_alto = lectura.bits[1]
+            print(f"Bajo={bajo} Alto={alto}")
 
-            print(f"Bajo: {flotador_bajo} | Alto: {flotador_alto}")
+            # ---- CONTROL BOMBA ----
+            if not bajo and not alto:
+                accion = True
+            else:
+                accion = False
 
-            accion = None
+            client.unit_id = ID_POZO
+            client.write_coil(0, accion)
 
-            if not flotador_ba_
+            print("Bomba", "ENCENDIDA" if accion else "APAGADA")
+
+            time.sleep(TIEMPO_ESPERA_CICLO)
+
+        except Exception as e:
+            print("ERROR:", e)
+            try:
+                client.unit_id = ID_POZO
+                client.write_coil(0, False)
+            except:
+                pass
+            time.sleep(TIEMPO_REINTENTO_ERROR)
+
+
+if __name__ == "__main__":
+    control_pozo()
