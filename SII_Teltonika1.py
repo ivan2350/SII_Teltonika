@@ -11,12 +11,12 @@ BAUDIOS = 9600
 ID_POZO = 31
 ID_TANQUE = 32
 #tiempos
-TIEMPO_ESPERA_CICLO = 12
-TIEMPO_REINTENTO_ERROR = 1
+TIEMPO_ESPERA_CICLO = 60
+TIEMPO_REINTENTO_ERROR = 12
 TIEMPO_REINTENTO_PUERTO = 8
 MAX_ERRORES = 3
 
-RETARDO_MIN_APAGADO = 30  # 5 minutos mínimo apagada
+RETARDO_MIN_APAGADO = 180  # 3 minutos mínimo apagada
 
 # ---------------------------------------------------
 # VARIABLES
@@ -39,7 +39,7 @@ def puede_encender():
     tiempo_apagada = time.time() - tiempo_ultimo_apagado
 
     if tiempo_apagada < RETARDO_MIN_APAGADO:
-        restante = int((RETARDO_MIN_APAGADO - tiempo_apagada) / 6) + 1
+        restante = int((RETARDO_MIN_APAGADO - tiempo_apagada) / 60) + 1
         log(f"Bomba en retardo OFF ({restante} min restantes)")
         return False
 
