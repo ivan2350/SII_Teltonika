@@ -16,7 +16,7 @@ MAX_ERRORES = 3
 
 
 def iniciar_cliente():
-    return ModbusSerialClient(
+    client = ModbusSerialClient(
         port=PUERTO,
         baudrate=BAUDIOS,
         bytesize=8,
@@ -24,6 +24,7 @@ def iniciar_cliente():
         stopbits=1,
         timeout=2
     )
+    return client
 
 
 def conectar(client):
@@ -35,7 +36,8 @@ def conectar(client):
 
 def apagar_bomba_seguridad(client):
     try:
-        client.write_coil(0, False, slave=ID_POZO)
+        client.unit_id = ID_POZO
+        client.write_coil(0, False)
         print("BOMBA APAGADA (Fail-Safe)")
     except Exception as e:
         print(f"No se pudo apagar bomba: {e}")
@@ -55,11 +57,9 @@ def control_pozo():
             if not conectar(client):
                 raise Exception("Puerto serial no disponible")
 
-            lectura = client.read_discrete_inputs(
-                address=0,
-                count=2,
-                slave=ID_TANQUE
-            )
+            # ---- LECTURA TANQUE ----
+            client.unit_id = ID_TANQUE
+            lectura = client.read_discrete_inputs(0, 2)
 
             if lectura.isError():
                 raise Exception("Error Modbus lectura tanque")
@@ -73,52 +73,4 @@ def control_pozo():
 
             accion = None
 
-            if not flotador_bajo and not flotador_alto:
-                accion = True
-                print("Tanque vacío → ENCENDER bomba")
-
-            elif flotador_bajo and flotador_alto:
-                accion = False
-                print("Tanque lleno → APAGAR bomba")
-
-            elif not flotador_bajo and flotador_alto:
-                accion = False
-                print("Error flotadores → APAGAR bomba")
-
-            if accion is not None and accion != ultimo_estado_bomba:
-                resp = client.write_coil(0, accion, slave=ID_POZO)
-
-                if resp.isError():
-                    raise Exception("Error Modbus escritura pozo")
-
-                ultimo_estado_bomba = accion
-                print("Bomba", "ENCENDIDA" if accion else "APAGADA")
-
-            time.sleep(TIEMPO_ESPERA_CICLO)
-
-        except Exception as e:
-            errores_consecutivos += 1
-            print(f"Error ({errores_consecutivos}/{MAX_ERRORES}): {e}")
-
-            apagar_bomba_seguridad(client)
-
-            if errores_consecutivos >= MAX_ERRORES:
-                print("Reiniciando conexión Modbus...")
-                try:
-                    client.close()
-                except:
-                    pass
-
-                time.sleep(5)
-                client = iniciar_cliente()
-                conectar(client)
-                errores_consecutivos = 0
-
-            time.sleep(TIEMPO_REINTENTO_ERROR)
-
-
-if __name__ == "__main__":
-    try:
-        control_pozo()
-    except KeyboardInterrupt:
-        print("Programa detenido por el usuario")
+            if not flotador_ba_
