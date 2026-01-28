@@ -10,7 +10,6 @@ ID_TANQUE = 32
 
 TIEMPO_ESPERA_CICLO = 120
 TIEMPO_REINTENTO_ERROR = 10
-MAX_ERRORES = 3
 
 
 def iniciar_cliente():
@@ -24,6 +23,13 @@ def iniciar_cliente():
     )
 
 
+def leer_entrada(client, direccion):
+    rr = client.read_discrete_inputs(direccion)
+    if rr.isError():
+        raise Exception(f"Error lectura entrada {direccion}")
+    return rr.bits[0]
+
+
 def control_pozo():
     client = iniciar_cliente()
     client.connect()
@@ -34,38 +40,20 @@ def control_pozo():
         try:
             # ---- LECTURA TANQUE ----
             client.unit_id = ID_TANQUE
-            rr = client.read_discrete_inputs(0, 2)
 
-            if rr.isError():
-                raise Exception("Error lectura tanque")
+            flotador_bajo = leer_entrada(client, 0)
+            flotador_alto = leer_entrada(client, 1)
 
-            bajo = rr.bits[0]
-            alto = rr.bits[1]
+            print(f"Bajo={flotador_bajo} | Alto={flotador_alto}")
 
-            print(f"Bajo={bajo} Alto={alto}")
-
-            # ---- CONTROL BOMBA ----
-            if not bajo and not alto:
+            # ---- LÓGICA ----
+            if not flotador_bajo and not flotador_alto:
                 accion = True
+                print("Tanque vacío → ENCENDER bomba")
             else:
                 accion = False
+                print("Tanque lleno / error → APAGAR bomba")
 
+            # ---- ESCRITURA POZO ----
             client.unit_id = ID_POZO
-            client.write_coil(0, accion)
-
-            print("Bomba", "ENCENDIDA" if accion else "APAGADA")
-
-            time.sleep(TIEMPO_ESPERA_CICLO)
-
-        except Exception as e:
-            print("ERROR:", e)
-            try:
-                client.unit_id = ID_POZO
-                client.write_coil(0, False)
-            except:
-                pass
-            time.sleep(TIEMPO_REINTENTO_ERROR)
-
-
-if __name__ == "__main__":
-    control_pozo()
+            client.write_coil_
