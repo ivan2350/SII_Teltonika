@@ -4,7 +4,7 @@ import sys
 from pymodbus.client.serial import ModbusSerialClient
 
 # ================= CONFIGURACION =================
-MODBUS_PORT = "/dev/ttyHS0"
+MODBUS_PORT = "/dev/rs485"
 MODBUS_BAUDRATE = 9600
 MODBUS_SLAVE = 32
 
