@@ -188,5 +188,3 @@ if __name__ == "__main__":
         control_pozo()
     except KeyboardInterrupt:
         log("Programa detenido por el usuario")
-        
-#prueba de github sync
