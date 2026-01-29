@@ -107,16 +107,24 @@ def main():
                         print(f"Arranque programado en {RETARDO_ARRANQUE}s")
 
                 # ===== ARRANQUE EN ESPERA =====
-                if arranque_pendiente:
-                    if bajo or alto:
-                        print("Arranque cancelado (nivel cambió)")
-                        arranque_pendiente = False
+               # ARRANQUE EN ESPERA
+if arranque_pendiente:
+    # cancelar SOLO si el tanque se llena o entra en estado inválido
+    if (bajo and alto) or (not bajo and alto):
+        print("Arranque cancelado (tanque ya no vacío)")
+        arranque_pendiente = False
 
-                    elif time.time() - tiempo_arranque >= RETARDO_ARRANQUE:
-                        print("Encendiendo bomba")
-                        set_bomba(True)
-                        bomba_encendida = True
-                        arranque_pendiente = False
+    elif time.time() - tiempo_arranque >= RETARDO_ARRANQUE:
+        print("Encendiendo bomba")
+        set_bomba(True)
+        bomba_encendida = True
+        arranque_pendiente = False
+
+    elif time.time() - tiempo_arranque >= RETARDO_ARRANQUE:
+        print("Encendiendo bomba")
+        set_bomba(True)
+        bomba_encendida = True
+        arranque_pendiente = False
 
                 time.sleep(TIEMPO_CICLO)
 
