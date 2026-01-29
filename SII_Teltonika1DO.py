@@ -1,106 +1,150 @@
 #!/usr/bin/env python3
 import time
 import subprocess
-from pymodbus.client.serial import ModbusSerialClient
+from pymodbus.client import ModbusSerialClient
 
-# ================= CONFIG =================
-MODBUS_PORT = "/dev/rs485"
-MODBUS_BAUDRATE = 9600
+# ================= CONFIGURACIÓN =================
+
+MODBUS_PORT = "/dev/ttyHS0"
+BAUDRATE = 9600
 MODBUS_SLAVE = 32
 
-COIL_FLOTADOR_BAJO = 0
-COIL_FLOTADOR_ALTO = 1
-
-RETARDO_REARRANQUE = 60       # segundos
-TIEMPO_MAX_MARCHA = 1800     # segundos
-CICLO = 2                    # segundos
+RETARDO_ARRANQUE = 60        # segundos
+CICLO_LECTURA = 2            # segundos
+TIMEOUT_MODBUS = 2
+REINTENTO_ERROR = 10
+MAX_ERRORES = 5
 
 DO_BOMBA = "ioman.gpio.dio0"
-# =========================================
+DI_MOTOR = "ioman.gpio.dio1"
 
-bomba_encendida = False
-ultimo_arranque = 0
+# ================= FUNCIONES =================
 
+def log(msg):
+    ts = time.strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{ts}] {msg}")
 
-def set_bomba(estado: bool):
-    global bomba_encendida
+def iniciar_modbus():
+    return ModbusSerialClient(
+        method="rtu",
+        port=MODBUS_PORT,
+        baudrate=BAUDRATE,
+        bytesize=8,
+        parity="N",
+        stopbits=1,
+        timeout=TIMEOUT_MODBUS
+    )
 
-    if estado == bomba_encendida:
-        return
-
-    value = "1" if estado else "0"
-
+def set_bomba(valor):
     try:
         subprocess.run(
-            [
-                "ubus",
-                "call",
-                DO_BOMBA,
-                "update",
-                f'{{"value":"{value}"}}'
-            ],
+            ["ubus", "call", DO_BOMBA, "update", f'{{"value":"{valor}"}}'],
             check=True
         )
-        bomba_encendida = estado
-        print(f"BOMBA → {'ENCENDIDA' if estado else 'APAGADA'}")
-
     except Exception as e:
-        print(f"ERROR control DO: {e}")
-        bomba_encendida = False
+        log(f"ERROR control bomba: {e}")
 
-
-client = ModbusSerialClient(
-    method="rtu",
-    port=MODBUS_PORT,
-    baudrate=MODBUS_BAUDRATE,
-    timeout=1
-)
-
-if not client.connect():
-    print("ERROR: No conecta Modbus")
-    exit(1)
-
-print("Sistema Pozo–Tanque iniciado")
-
-while True:
+def get_estado_motor():
     try:
-        rr = client.read_coils(
-            address=COIL_FLOTADOR_BAJO,
-            count=2,
-            slave=MODBUS_SLAVE
+        r = subprocess.check_output(
+            ["ubus", "call", DI_MOTOR, "status"],
+            text=True
         )
+        return '"value": "1"' in r
+    except:
+        return None
 
-        if rr.isError():
-            raise Exception("Error Modbus")
+# ================= PROGRAMA PRINCIPAL =================
 
-        flot_bajo = rr.bits[0]
-        flot_alto = rr.bits[1]
-        ahora = time.time()
+def main():
+    client = iniciar_modbus()
+    errores = 0
 
-        print(
-            f"Flotador BAJO: {flot_bajo} | "
-            f"Flotador ALTO: {flot_alto} | "
-            f"Motor: {bomba_encendida}"
-        )
+    bomba_encendida = False
+    arranque_pendiente = False
+    tiempo_arranque = 0
 
-        # ===== PARO SOLO CON TANQUE LLENO =====
-        if flot_bajo and flot_alto:
-            set_bomba(False)
+    log("Sistema Pozo–Tanque iniciado")
 
-        # ===== ARRANQUE SOLO CON TANQUE VACÍO =====
-        elif not flot_bajo and not flot_alto:
-            if not bomba_encendida:
-                if ahora - ultimo_arranque >= RETARDO_REARRANQUE:
-                    set_bomba(True)
-                    ultimo_arranque = ahora
+    while True:
+        try:
+            if not client.connect():
+                raise Exception("No conecta Modbus")
 
-        # ===== PROTECCIÓN POR TIEMPO =====
-        if bomba_encendida and (ahora - ultimo_arranque) > TIEMPO_MAX_MARCHA:
-            print("Protección: tanque no responde")
-            set_bomba(False)
+            lectura = client.read_discrete_inputs(
+                address=0,
+                count=2,
+                slave=MODBUS_SLAVE
+            )
 
-    except Exception as e:
-        print(f"ERROR: {e}")
-        set_bomba(False)
+            if lectura.isError():
+                raise Exception("Error Modbus lectura tanque")
 
-    time.sleep(CICLO)
+            errores = 0
+
+            bajo = lectura.bits[0]
+            alto = lectura.bits[1]
+            motor = get_estado_motor()
+
+            log(f"Flotador BAJO: {bajo} | Flotador ALTO: {alto} | Motor: {motor}")
+
+            # ================= LÓGICA =================
+
+            # TANQUE LLENO O ESTADO INVÁLIDO
+            if (bajo and alto) or (not bajo and alto):
+                if bomba_encendida or arranque_pendiente:
+                    log("Tanque lleno / estado inválido → APAGAR bomba")
+                    set_bomba("0")
+                    bomba_encendida = False
+                    arranque_pendiente = False
+
+            # TANQUE VACÍO → programar arranque
+            elif not bajo and not alto:
+                if not bomba_encendida and not arranque_pendiente:
+                    arranque_pendiente = True
+                    tiempo_arranque = time.time()
+                    log(f"Arranque programado en {RETARDO_ARRANQUE}s")
+
+            # ARRANQUE CON RETARDO
+            if arranque_pendiente:
+                if bajo or alto:
+                    log("Arranque cancelado (nivel cambió)")
+                    arranque_pendiente = False
+
+                elif time.time() - tiempo_arranque >= RETARDO_ARRANQUE:
+                    log("Encendiendo bomba")
+                    set_bomba("1")
+                    bomba_encendida = True
+                    arranque_pendiente = False
+
+            time.sleep(CICLO_LECTURA)
+
+        except Exception as e:
+            errores += 1
+            log(f"ERROR ({errores}/{MAX_ERRORES}): {e}")
+
+            log("FAIL-SAFE → apagando bomba")
+            set_bomba("0")
+            bomba_encendida = False
+            arranque_pendiente = False
+
+            if errores >= MAX_ERRORES:
+                log("Reiniciando conexión Modbus")
+                try:
+                    client.close()
+                except:
+                    pass
+                time.sleep(5)
+                client = iniciar_modbus()
+                errores = 0
+
+            time.sleep(REINTENTO_ERROR)
+
+# ================= EJECUCIÓN =================
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        log("Programa detenido manualmente")
+        set_bomba("0")
