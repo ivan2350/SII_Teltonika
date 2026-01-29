@@ -118,4 +118,4 @@ def main():
                     print("Encendiendo bomba")
                     set_bomba("1")
                     bomba_encendida = True
-                    arranque_pendiente = False
+            arranque_pendiente = False
