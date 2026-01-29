@@ -24,8 +24,8 @@ def leer_flotadores():
     SIMULACIÓN DE FLOTADORES
     Cámbialos para probar lógica
     """
-    flotador_bajo = False   # False = sin agua
-    flotador_alto = False   # False = no lleno
+    flotador_bajo = true   # False = sin agua
+    flotador_alto = true   # False = no lleno
     return flotador_bajo, flotador_alto
 
 
