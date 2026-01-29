@@ -9,7 +9,7 @@ RETARDO_ARRANQUE = 10      # segundos
 CICLO = 2                 # segundos entre ciclos
 
 # Modbus RS485
-MODBUS_PORT = "/dev/ttyRS485"
+MODBUS_PORT = "/dev/ttyHS0"
 MODBUS_BAUDRATE = 9600
 MODBUS_SLAVE_ID = 1
 MODBUS_TIMEOUT = 2
