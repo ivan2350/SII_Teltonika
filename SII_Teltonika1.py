@@ -11,10 +11,10 @@ BAUDIOS = 9600
 ID_POZO = 31
 ID_TANQUE = 32
 
-TIEMPO_ESPERA_CICLO = 12       # Cada cuánto se lee el tanque
+TIEMPO_ESPERA_CICLO = 120       # Cada cuánto se lee el tanque
 TIEMPO_REINTENTO_ERROR = 10      # Pausa tras error antes de reintentar
 TIEMPO_REINTENTO_PUERTO = 8      # Pausa al reiniciar puerto
-MAX_ERRORES = 3                   # Reintentos antes de apagar
+MAX_ERRORES = 10                   # Reintentos antes de apagar
 RETARDO_MIN_APAGADO = 180         # 3 minutos mínimo apagada
 
 # ---------------------------------------------------
