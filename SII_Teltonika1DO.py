@@ -1,159 +1,108 @@
 #!/usr/bin/env python3
 import time
-import subprocess
-from pymodbus.client import ModbusSerialClient
+import sys
+from pymodbus.client.serial import ModbusSerialClient
 
 # ================= CONFIGURACIÓN =================
+MODBUS_PORT = "/dev/ttyRS485"
+MODBUS_BAUDRATE = 9600
+MODBUS_SLAVE = 32
 
-MODBUS_PORT = "/dev/ttyHS0"
-BAUDRATE = 9600
-SLAVE_TANQUE = 32
+COIL_FLOTADOR_BAJO = 0
+COIL_FLOTADOR_ALTO = 1
 
-TIEMPO_CICLO = 5            # segundos
-RETARDO_ARRANQUE = 60       # segundos
-TIMEOUT_MODBUS = 2
-MAX_ERRORES = 5
+DO_GPIO = 1  # Salida digital Teltonika
 
-# ================= IO TELTONIKA =================
+TIEMPO_REARRANQUE = 60        # segundos
+TIEMPO_MAX_ENCENDIDO = 1800   # 30 min seguridad
+CICLO_LECTURA = 2             # segundos
+# =================================================
 
-DO_BOMBA = "ioman.gpio.dio0"   # salida bomba
-DI_MOTOR = "ioman.gpio.dio1"   # entrada estado motor (informativo)
+motor_encendido = False
+ultimo_arranque = 0
 
-# ================= FUNCIONES =================
+def log(msg):
+    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
+    sys.stdout.flush()
 
-def iniciar_modbus():
-    return ModbusSerialClient(
-        method="rtu",
-        port=MODBUS_PORT,
-        baudrate=BAUDRATE,
-        bytesize=8,
-        parity="N",
-        stopbits=1,
-        timeout=TIMEOUT_MODBUS
-    )
+def set_motor(estado):
+    global motor_encendido
+    if estado and not motor_encendido:
+        log("MOTOR → ENCENDIDO")
+        system_call("on")
+        motor_encendido = True
+    elif not estado and motor_encendido:
+        log("MOTOR → APAGADO")
+        system_call("off")
+        motor_encendido = False
 
+def system_call(cmd):
+    # Teltonika DO
+    # gpio.sh set <gpio> <0|1>
+    value = "1" if cmd == "on" else "0"
+    os_cmd = f"gpio.sh set {DO_GPIO} {value}"
+    import os
+    os.system(os_cmd)
 
-def leer_flotadores(client):
-    rr = client.read_discrete_inputs(0, 2, unit=SLAVE_TANQUE)
-    if rr.isError():
-        raise Exception("Error Modbus flotadores")
+def fail_safe():
+    log("FAIL-SAFE → apagando bomba")
+    set_motor(False)
 
-    return rr.bits[0], rr.bits[1]
+# ================= MODBUS =================
+client = ModbusSerialClient(
+    method="rtu",
+    port=MODBUS_PORT,
+    baudrate=MODBUS_BAUDRATE,
+    timeout=1
+)
 
+if not client.connect():
+    log("ERROR: No conecta Modbus")
+    fail_safe()
+    sys.exit(1)
 
-def set_bomba(encender):
-    valor = "1" if encender else "0"
-    subprocess.run(
-        ["ubus", "call", DO_BOMBA, "update", f'{{"value":"{valor}"}}'],
-        check=True
-    )
+log("Sistema Pozo–Tanque iniciado")
 
-
-def leer_estado_motor():
-    r = subprocess.check_output(
-        ["ubus", "call", DI_MOTOR, "status"],
-        text=True
-    )
-    return '"value": "1"' in r
-
-
-# ================= PROGRAMA PRINCIPAL =================
-
-def main():
-    print("\nSistema Pozo–Tanque (DO Teltonika) iniciado\n")
-
-    client = iniciar_modbus()
-    errores = 0
-
-    bomba_encendida = False
-    arranque_pendiente = False
-    tiempo_arranque = 0
-
-    if not client.connect():
-        print("ERROR: No conecta Modbus")
-        set_bomba(False)
-        return
-
+# ================= LOOP PRINCIPAL =================
+while True:
     try:
-        while True:
-            try:
-                bajo, alto = leer_flotadores(client)
-                estado_motor = leer_estado_motor()
+        rr = client.read_coils(
+            address=COIL_FLOTADOR_BAJO,
+            count=2,
+            slave=MODBUS_SLAVE
+        )
 
-                print(f"Flotadores → Bajo:{bajo} Alto:{alto} | Motor:{estado_motor}")
+        if rr.isError():
+            raise Exception("Error lectura Modbus")
 
-                errores = 0
+        flotador_bajo = rr.bits[0]
+        flotador_alto = rr.bits[1]
 
-                # ===== TANQUE LLENO =====
-                if bajo and alto:
-                    if bomba_encendida:
-                        print("Tanque lleno → APAGAR bomba")
-                        set_bomba(False)
-                        bomba_encendida = False
-                    arranque_pendiente = False
+        log(f"Flotador BAJO: {flotador_bajo} | Flotador ALTO: {flotador_alto} | Motor: {motor_encendido}")
 
-                # ===== ESTADO INVÁLIDO =====
-                elif not bajo and alto:
-                    print("Estado inválido flotadores → APAGAR bomba")
-                    set_bomba(False)
-                    bomba_encendida = False
-                    arranque_pendiente = False
+        ahora = time.time()
 
-                # ===== TANQUE VACÍO =====
-                elif not bajo and not alto:
-                    if not bomba_encendida and not arranque_pendiente:
-                        arranque_pendiente = True
-                        tiempo_arranque = time.time()
-                        print(f"Arranque programado en {RETARDO_ARRANQUE}s")
+        # -------- LÓGICA --------
+        # Tanque lleno → apagar
+        if flotador_bajo and flotador_alto:
+            set_motor(False)
 
-                # ===== ARRANQUE EN ESPERA =====
-               # ARRANQUE EN ESPERA
-if arranque_pendiente:
-    # cancelar SOLO si el tanque se llena o entra en estado inválido
-    if (bajo and alto) or (not bajo and alto):
-        print("Arranque cancelado (tanque ya no vacío)")
-        arranque_pendiente = False
+        # Tanque bajo → posible arranque
+        elif not flotador_bajo:
+            if not motor_encendido:
+                if ahora - ultimo_arranque >= TIEMPO_REARRANQUE:
+                    set_motor(True)
+                    ultimo_arranque = ahora
+                else:
+                    log("Esperando tiempo de re-arranque")
 
-    elif time.time() - tiempo_arranque >= RETARDO_ARRANQUE:
-        print("Encendiendo bomba")
-        set_bomba(True)
-        bomba_encendida = True
-        arranque_pendiente = False
+        # Protección por tiempo máximo encendido
+        if motor_encendido and (ahora - ultimo_arranque) > TIEMPO_MAX_ENCENDIDO:
+            log("Protección: tiempo máximo encendido alcanzado")
+            set_motor(False)
 
-    elif time.time() - tiempo_arranque >= RETARDO_ARRANQUE:
-        print("Encendiendo bomba")
-        set_bomba(True)
-        bomba_encendida = True
-        arranque_pendiente = False
+    except Exception as e:
+        log(f"ERROR: {e}")
+        fail_safe()
 
-                time.sleep(TIEMPO_CICLO)
-
-            except Exception as e:
-                errores += 1
-                print(f"ERROR ({errores}/{MAX_ERRORES}): {e}")
-
-                set_bomba(False)
-                bomba_encendida = False
-                arranque_pendiente = False
-
-                if errores >= MAX_ERRORES:
-                    print("Reiniciando conexión Modbus")
-                    client.close()
-                    time.sleep(3)
-                    client = iniciar_modbus()
-                    client.connect()
-                    errores = 0
-
-                time.sleep(5)
-
-    except KeyboardInterrupt:
-        print("\nPrograma detenido por usuario")
-        set_bomba(False)
-
-    finally:
-        client.close()
-        set_bomba(False)
-
-
-if __name__ == "__main__":
-    main()
+    time.sleep(CICLO_LECTURA)
