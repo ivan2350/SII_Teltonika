@@ -1,54 +1,35 @@
 #!/usr/bin/env python3
 import time
-import sys
 from pymodbus.client.serial import ModbusSerialClient
 
-# ================= CONFIGURACION =================
-MODBUS_PORT = "/dev/rs485"
+# ================= CONFIG =================
+MODBUS_PORT = "/dev/rs485"      # ← COMO EN TU CÓDIGO ORIGINAL
 MODBUS_BAUDRATE = 9600
 MODBUS_SLAVE = 32
 
 COIL_FLOTADOR_BAJO = 0
 COIL_FLOTADOR_ALTO = 1
 
-DO_GPIO = 1  # Salida digital Teltonika
+RETARDO_REARRANQUE = 60
+TIEMPO_MAX_MARCHA = 1800
+CICLO = 2
+# =========================================
 
-TIEMPO_REARRANQUE = 60        # segundos
-TIEMPO_MAX_ENCENDIDO = 1800   # 30 min seguridad
-CICLO_LECTURA = 2             # segundos
-# =================================================
-
-motor_encendido = False
+bomba_encendida = False
 ultimo_arranque = 0
 
-def log(msg):
-    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
-    sys.stdout.flush()
+def set_bomba(estado):
+    global bomba_encendida
+    if estado == bomba_encendida:
+        return
 
-def set_motor(estado):
-    global motor_encendido
-    if estado and not motor_encendido:
-        log("MOTOR → ENCENDIDO")
-        system_call("on")
-        motor_encendido = True
-    elif not estado and motor_encendido:
-        log("MOTOR → APAGADO")
-        system_call("off")
-        motor_encendido = False
+    value = "1" if estado else "0"
+    with open("/sys/class/gpio/gpio1/value", "w") as f:
+        f.write(value)
 
-def system_call(cmd):
-    # Teltonika DO
-    # gpio.sh set <gpio> <0|1>
-    value = "1" if cmd == "on" else "0"
-    os_cmd = f"gpio.sh set {DO_GPIO} {value}"
-    import os
-    os.system(os_cmd)
+    bomba_encendida = estado
+    print(f"BOMBA → {'ENCENDIDA' if estado else 'APAGADA'}")
 
-def fail_safe():
-    log("FAIL-SAFE → apagando bomba")
-    set_motor(False)
-
-# ================= MODBUS =================
 client = ModbusSerialClient(
     method="rtu",
     port=MODBUS_PORT,
@@ -57,13 +38,11 @@ client = ModbusSerialClient(
 )
 
 if not client.connect():
-    log("ERROR: No conecta Modbus")
-    fail_safe()
-    sys.exit(1)
+    print("ERROR Modbus")
+    exit(1)
 
-log("Sistema Pozo–Tanque iniciado")
+print("Sistema Pozo–Tanque iniciado")
 
-# ================= LOOP PRINCIPAL =================
 while True:
     try:
         rr = client.read_coils(
@@ -73,36 +52,36 @@ while True:
         )
 
         if rr.isError():
-            raise Exception("Error lectura Modbus")
+            raise Exception("Error Modbus")
 
-        flotador_bajo = rr.bits[0]
-        flotador_alto = rr.bits[1]
-
-        log(f"Flotador BAJO: {flotador_bajo} | Flotador ALTO: {flotador_alto} | Motor: {motor_encendido}")
-
+        flot_bajo = rr.bits[0]
+        flot_alto = rr.bits[1]
         ahora = time.time()
 
-        # -------- LÓGICA --------
-        # Tanque lleno → apagar
-        if flotador_bajo and flotador_alto:
-            set_motor(False)
+        print(
+            f"Flotador BAJO: {flot_bajo} | "
+            f"Flotador ALTO: {flot_alto} | "
+            f"Motor: {bomba_encendida}"
+        )
 
-        # Tanque bajo → posible arranque
-        elif not flotador_bajo:
-            if not motor_encendido:
-                if ahora - ultimo_arranque >= TIEMPO_REARRANQUE:
-                    set_motor(True)
+        # ===== PARO POR TANQUE LLENO =====
+        if flot_bajo and flot_alto:
+            set_bomba(False)
+
+        # ===== ARRANQUE POR TANQUE VACÍO =====
+        elif not flot_bajo and not flot_alto:
+            if not bomba_encendida:
+                if ahora - ultimo_arranque >= RETARDO_REARRANQUE:
+                    set_bomba(True)
                     ultimo_arranque = ahora
-                else:
-                    log("Esperando tiempo de re-arranque")
 
-        # Protección por tiempo máximo encendido
-        if motor_encendido and (ahora - ultimo_arranque) > TIEMPO_MAX_ENCENDIDO:
-            log("Protección: tiempo máximo encendido alcanzado")
-            set_motor(False)
+        # ===== PROTECCIÓN =====
+        if bomba_encendida and (ahora - ultimo_arranque) > TIEMPO_MAX_MARCHA:
+            print("Protección: tanque no responde")
+            set_bomba(False)
 
     except Exception as e:
-        log(f"ERROR: {e}")
-        fail_safe()
+        print(f"ERROR: {e}")
+        set_bomba(False)
 
-    time.sleep(CICLO_LECTURA)
+    time.sleep(CICLO)
