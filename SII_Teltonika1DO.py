@@ -2,7 +2,7 @@
 import time
 import json
 import subprocess
-from pymodbus.client import ModbusSerialClient
+from pymodbus.client.sync import ModbusSerialClient
 
 # ================= CONFIGURACIÓN =================
 MODBUS_PORT = "/dev/ttyHS0"
@@ -51,7 +51,7 @@ def set_bomba(valor: str):
             check=True
         )
     except Exception as e:
-        print(f"[ERROR] accion bomba: {e}")
+        print(f"[ERROR] Acción bomba: {e}")
 
 def leer_estado_motor():
     """Lee el estado real del motor desde entrada digital dio1"""
@@ -68,6 +68,19 @@ def leer_estado_motor():
     except:
         return False
 
+# ================= UTIL =================
+
+def formato_estado(estado: bool):
+    return "ON " if estado else "OFF"
+
+def imprimir_log(fecha, bajo, alto, motor, bomba, motivo):
+    print(f"{fecha} | "
+          f"Bajo: {formato_estado(bajo)} | "
+          f"Alto: {formato_estado(alto)} | "
+          f"Motor: {formato_estado(motor)} | "
+          f"Bomba: {formato_estado(bomba)} | "
+          f"Motivo: {motivo}")
+
 # ================= LÓGICA PRINCIPAL =================
 
 def control_pozo():
@@ -81,6 +94,8 @@ def control_pozo():
     errores_consecutivos = 0
 
     print("\n🚰 Sistema Pozo–Tanque iniciado\n")
+    print("Timestamp           | Bajo | Alto | Motor | Bomba | Motivo")
+    print("-"*80)
 
     while True:
         try:
@@ -104,12 +119,12 @@ def control_pozo():
             if not bajo and not alto and not bomba_encendida and not arranque_pendiente:
                 arranque_pendiente = True
                 tiempo_arranque = time.time()
-                print(f"[INFO] Arranque programado en {RETARDO_ARRANQUE}s")
-
+                motivo_arranque = "Arranque programado"
+            
             # Rearranque
             if arranque_pendiente:
                 if bajo or alto:
-                    print("[INFO] Arranque cancelado (nivel cambió)")
+                    motivo_ultimo_cambio = "Arranque cancelado (nivel cambió)"
                     arranque_pendiente = False
                 elif time.time() - tiempo_arranque >= RETARDO_ARRANQUE:
                     set_bomba("1")
@@ -130,10 +145,14 @@ def control_pozo():
                 motivo_ultimo_cambio = "Inconsistencia flotadores → APAGANDO bomba"
 
             # ================= IMPRESIÓN EN CONSOLA =================
-            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
-                  f"Flotador BAJO: {bajo} | Flotador ALTO: {alto} | "
-                  f"Motor: {motor_estado} | Bomba: {bomba_encendida} | "
-                  f"Motivo: {motivo_ultimo_cambio}")
+            imprimir_log(
+                time.strftime("%Y-%m-%d %H:%M:%S"),
+                bajo,
+                alto,
+                motor_estado,
+                bomba_encendida,
+                motivo_ultimo_cambio if not arranque_pendiente else motivo_arranque
+            )
 
             time.sleep(TIEMPO_ESPERA_CICLO)
 
