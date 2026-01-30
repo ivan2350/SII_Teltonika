@@ -2,7 +2,7 @@
 import time
 import json
 import subprocess
-from pymodbus.client.import ModbusSerialClient
+from pymodbus.client import ModbusSerialClient
 
 # ================= CONFIGURACIÓN =================
 MODBUS_PORT = "/dev/ttyHS0"
