@@ -1,99 +1,117 @@
 #!/usr/bin/env python3
 import time
-from datetime import datetime, timedelta
-from rich.console import Console
-from rich.table import Table
-from rich.live import Live
+from pymodbus.client import ModbusSerialClient
 
 # ================= CONFIGURACIÓN =================
 
-TIEMPO_REARRANQUE = 300  # segundos (ej. 5 minutos)
+MODBUS_PORT = "/dev/ttyHS0"
+BAUDRATE = 9600
+ID_TANQUE = 32
+
+TIEMPO_REARRANQUE = 300      # segundos
+TIEMPO_CICLO = 2             # segundos
 
 # ================= ESTADOS =================
 
-bomba_encendida = False
-ultimo_apagado = None  # datetime cuando se apagó la bomba
+motor_encendido = False
+ultimo_motivo = "Sistema iniciado"
+en_rearranque = False
+tiempo_apagado = None
 
-# Simulación de flotadores (CAMBIAR POR LECTURA REAL)
-flotador_bajo = False
-flotador_alto = False
+# ================= MODBUS =================
 
-console = Console()
+client = ModbusSerialClient(
+    method="rtu",
+    port=MODBUS_PORT,
+    baudrate=BAUDRATE,
+    timeout=1,
+    parity="N",
+    stopbits=1,
+    bytesize=8
+)
 
-# ================= FUNCIONES =================
+def conectar():
+    if not client.connected:
+        return client.connect()
+    return True
 
-def puede_rearrancar():
-    """Verifica si ya transcurrió el tiempo de rearranque"""
-    if ultimo_apagado is None:
-        return True
-    return datetime.now() >= ultimo_apagado + timedelta(seconds=TIEMPO_REARRANQUE)
+# ================= SALIDA DIGITAL =================
 
-def encender_bomba():
-    global bomba_encendida
-    if not bomba_encendida:
-        bomba_encendida = True
-        console.log("🟢 [bold green]Bomba ENCENDIDA[/bold green]")
+def encender_motor():
+    global motor_encendido, ultimo_motivo
+    if motor_encendido:
+        return
+    motor_encendido = True
+    ultimo_motivo = "Arranque permitido"
+    print(">> MOTOR ENCENDIDO")
 
-def apagar_bomba():
-    global bomba_encendida, ultimo_apagado
-    if bomba_encendida:
-        bomba_encendida = False
-        ultimo_apagado = datetime.now()
-        console.log("🔴 [bold red]Bomba APAGADA[/bold red]")
+def apagar_motor(motivo):
+    global motor_encendido, ultimo_motivo, en_rearranque, tiempo_apagado
+    if not motor_encendido:
+        return
+    motor_encendido = False
+    ultimo_motivo = motivo
+    en_rearranque = True
+    tiempo_apagado = time.time()
+    print(f">> MOTOR APAGADO ({motivo})")
 
-def crear_tabla():
-    table = Table(title="💧 Control de Bomba", expand=True)
+# ================= LÓGICA =================
 
-    table.add_column("Parámetro", justify="left", style="cyan", no_wrap=True)
-    table.add_column("Estado", justify="center", style="white")
+print("Sistema Pozo–Tanque iniciado")
 
-    table.add_row(
-        "Flotador Bajo",
-        "⬆️ ACTIVO" if flotador_bajo else "⬇️ INACTIVO"
-    )
-    table.add_row(
-        "Flotador Alto",
-        "⬆️ ACTIVO" if flotador_alto else "⬇️ INACTIVO"
-    )
-    table.add_row(
-        "Bomba",
-        "🟢 ENCENDIDA" if bomba_encendida else "🔴 APAGADA"
-    )
+while True:
+    try:
+        if not conectar():
+            raise Exception("No se pudo abrir puerto Modbus")
 
-    if ultimo_apagado:
-        restante = max(
-            0,
-            int((ultimo_apagado + timedelta(seconds=TIEMPO_REARRANQUE) - datetime.now()).total_seconds())
-        )
-        table.add_row(
-            "Rearranque",
-            f"⏳ {restante} s"
-        )
-    else:
-        table.add_row(
-            "Rearranque",
-            "✔️ Disponible"
+        lectura = client.read_discrete_inputs(
+            address=0,
+            count=2,
+            slave=ID_TANQUE
         )
 
-    return table
+        if lectura.isError():
+            raise Exception("Error lectura flotadores")
 
-# ================= LOOP PRINCIPAL =================
+        flotador_bajo = lectura.bits[0]
+        flotador_alto = lectura.bits[1]
 
-with Live(crear_tabla(), refresh_per_second=2, console=console) as live:
-    while True:
+        ahora = time.time()
 
-        # ================= LÓGICA DE CONTROL =================
-        # Apagado por flotador alto
-        if flotador_alto:
-            apagar_bomba()
+        # Rearranque
+        if en_rearranque:
+            restante = TIEMPO_REARRANQUE - (ahora - tiempo_apagado)
+            if restante <= 0:
+                en_rearranque = False
+            else:
+                print(
+                    f"BAJO: {flotador_bajo} | ALTO: {flotador_alto} | "
+                    f"MOTOR: {'ENCENDIDO' if motor_encendido else 'APAGADO'} | "
+                    f"REARRANQUE: {int(restante)}s | "
+                    f"ULTIMO: {ultimo_motivo}"
+                )
+                time.sleep(TIEMPO_CICLO)
+                continue
 
-        # Encendido por flotador bajo (solo si ya pasó el rearranque)
-        elif flotador_bajo and puede_rearrancar():
-            encender_bomba()
+        # Inconsistencia
+        if flotador_alto and not flotador_bajo:
+            apagar_motor("Inconsistencia flotadores")
 
-        # ================= ACTUALIZAR TABLA =================
-        live.update(crear_tabla())
+        # Tanque lleno
+        elif flotador_bajo and flotador_alto:
+            apagar_motor("Tanque lleno")
 
-        # ================= SIMULACIÓN =================
-        # (Quitar esto cuando conectes flotadores reales)
-        time.sleep(1)
+        # Permitir arranque
+        elif not flotador_bajo and not flotador_alto:
+            encender_motor()
+
+        print(
+            f"BAJO: {flotador_bajo} | ALTO: {flotador_alto} | "
+            f"MOTOR: {'ENCENDIDO' if motor_encendido else 'APAGADO'} | "
+            f"ULTIMO: {ultimo_motivo}"
+        )
+
+    except Exception as e:
+        print(f"ERROR: {e}")
+
+    time.sleep(TIEMPO_CICLO)
