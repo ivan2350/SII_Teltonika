@@ -3,7 +3,7 @@ import time
 import subprocess
 from pymodbus.client import ModbusSerialClient
 
-# ================= CONFIG =================
+# ================= CONFIG ==================
 MODBUS_PORT = "/dev/ttyHS0"
 BAUDRATE = 9600
 MODBUS_SLAVE = 32
