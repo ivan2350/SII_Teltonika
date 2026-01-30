@@ -2,7 +2,7 @@
 import time
 import json
 import subprocess
-from pymodbus.client import ModbusSerialClient
+from pymodbus.client.sync import ModbusSerialClient
 
 # ================= CONFIGURACIÓN =================
 MODBUS_PORT = "/dev/ttyHS0"
@@ -51,7 +51,7 @@ def set_bomba(valor: str):
             check=True
         )
     except Exception as e:
-        print(f"[ERROR] Acción bomba: {e}")
+        print(f"\033[91m[ERROR] Acción bomba: {e}\033[0m")
 
 def leer_estado_motor():
     """Lee el estado real del motor desde entrada digital dio1"""
@@ -71,7 +71,7 @@ def leer_estado_motor():
 # ================= UTIL =================
 
 def formato_estado(estado: bool):
-    return "ON " if estado else "OFF"
+    return f"\033[92mON \033[0m" if estado else f"\033[91mOFF\033[0m"
 
 def imprimir_log(fecha, bajo, alto, motor, bomba, motivo):
     print(f"{fecha} | "
@@ -95,7 +95,7 @@ def control_pozo():
 
     print("\n🚰 Sistema Pozo–Tanque iniciado\n")
     print("Timestamp           | Bajo | Alto | Motor | Bomba | Motivo")
-    print("-"*80)
+    print("-"*100)
 
     while True:
         try:
@@ -119,17 +119,21 @@ def control_pozo():
             if not bajo and not alto and not bomba_encendida and not arranque_pendiente:
                 arranque_pendiente = True
                 tiempo_arranque = time.time()
-                motivo_arranque = "Arranque programado"
             
             # Rearranque
+            motivo_arranque = ""
             if arranque_pendiente:
+                tiempo_restante = max(0, RETARDO_ARRANQUE - (time.time() - tiempo_arranque))
+                motivo_arranque = f"Arranque programado ({int(tiempo_restante)}s restantes)"
+
                 if bajo or alto:
                     motivo_ultimo_cambio = "Arranque cancelado (nivel cambió)"
                     arranque_pendiente = False
                 elif time.time() - tiempo_arranque >= RETARDO_ARRANQUE:
-                    set_bomba("1")
-                    bomba_encendida = True
-                    motivo_ultimo_cambio = "Tanque vacío → ENCENDIENDO bomba"
+                    if not bomba_encendida:  # solo manda control si no está encendida
+                        set_bomba("1")
+                        bomba_encendida = True
+                        motivo_ultimo_cambio = "Tanque vacío → ENCENDIENDO bomba"
                     arranque_pendiente = False
 
             # Tanque lleno
@@ -151,16 +155,18 @@ def control_pozo():
                 alto,
                 motor_estado,
                 bomba_encendida,
-                motivo_ultimo_cambio if not arranque_pendiente else motivo_arranque
+                motivo_arranque if arranque_pendiente else motivo_ultimo_cambio
             )
 
             time.sleep(TIEMPO_ESPERA_CICLO)
 
         except Exception as e:
             errores_consecutivos += 1
-            print(f"[ERROR {errores_consecutivos}] {e}")
-            set_bomba("0")  # FAIL-SAFE
-            motivo_ultimo_cambio = "ERROR → FAIL-SAFE"
+            print(f"\033[91m[ERROR {errores_consecutivos}] {e}\033[0m")
+            if bomba_encendida:
+                set_bomba("0")  # FAIL-SAFE
+                bomba_encendida = False
+                motivo_ultimo_cambio = "ERROR → FAIL-SAFE"
             if errores_consecutivos >= 5:
                 client = reiniciar_conexion(client)
                 errores_consecutivos = 0
