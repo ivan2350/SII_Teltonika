@@ -68,6 +68,11 @@ def leer_estado_motor():
     except:
         return False
 
+def imprimir_tabla(bajo, alto, motor, bomba, motivo):
+    """Imprime los estados en tabla alineada"""
+    print(f"{'BAJO':^6}|{'ALTO':^6}|{'MOTOR':^6}|{'BOMBA':^6}|{'MOTIVO'}")
+    print(f"{str(bajo):^6}|{str(alto):^6}|{str(motor):^6}|{str(bomba):^6}|{motivo}")
+
 # ================= LÓGICA PRINCIPAL =================
 
 def control_pozo():
@@ -98,8 +103,6 @@ def control_pozo():
             alto = lectura.bits[1]
             motor_estado = leer_estado_motor()
 
-            print(f"[INFO] Flotador BAJO: {bajo} | Flotador ALTO: {alto} | Motor: {motor_estado} | Bomba: {bomba_encendida} | Motivo: {motivo_ultimo_cambio}")
-
             # ================= LOGICA DE CONTROL =================
 
             # Tanque vacío → programar arranque
@@ -114,7 +117,6 @@ def control_pozo():
                     print("[INFO] Arranque cancelado (nivel cambió)")
                     arranque_pendiente = False
                 elif time.time() - tiempo_arranque >= RETARDO_ARRANQUE:
-                    print("[ACCION] Encendiendo bomba")
                     set_bomba("1")
                     bomba_encendida = True
                     motivo_ultimo_cambio = "Tanque vacío → ENCENDIENDO bomba"
@@ -132,6 +134,7 @@ def control_pozo():
                 bomba_encendida = False
                 motivo_ultimo_cambio = "Inconsistencia flotadores → APAGANDO bomba"
 
+            imprimir_tabla(bajo, alto, motor_estado, bomba_encendida, motivo_ultimo_cambio)
             time.sleep(TIEMPO_ESPERA_CICLO)
 
         except Exception as e:
