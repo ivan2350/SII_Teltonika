@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import time
 import os
+import json
 import subprocess
 from datetime import datetime
 from pymodbus.client import ModbusSerialClient
@@ -49,12 +50,24 @@ def leer_flotadores():
         raise Exception("Error Modbus lectura flotadores")
     return lectura.bits[0], lectura.bits[1]
 
+import json
+import subprocess
+
 def leer_estado_motor():
     try:
-        with open(ENTRADA_MOTOR, "r") as f:
-            return f.read().strip() == "1"
-    except:
+        resultado = subprocess.run(
+            ["ubus", "call", "ioman.gpio.dio1", "status"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        data = json.loads(resultado.stdout)
+        valor = data.get("value", "0")
+        return valor == "1"
+    except Exception as e:
+        print(f"⚠ ERROR leyendo motor: {e}")
         return False
+
 
 def set_bomba(estado):
     global motor_encendido, ultimo_cambio_motor
