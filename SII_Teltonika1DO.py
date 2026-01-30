@@ -8,15 +8,15 @@ MODBUS_PORT = "/dev/ttyHS0"
 BAUDRATE = 9600
 ID_TANQUE = 32
 
-TIEMPO_REARRANQUE = 300      # segundos
-TIEMPO_CICLO = 2             # segundos
+TIEMPO_REARRANQUE = 300   # segundos
+TIEMPO_CICLO = 2
 
 # ================= ESTADOS =================
 
 motor_encendido = False
 ultimo_motivo = "Sistema iniciado"
 en_rearranque = False
-tiempo_apagado = None
+inicio_rearranque = None
 
 # ================= MODBUS =================
 
@@ -24,10 +24,7 @@ client = ModbusSerialClient(
     method="rtu",
     port=MODBUS_PORT,
     baudrate=BAUDRATE,
-    timeout=1,
-    parity="N",
-    stopbits=1,
-    bytesize=8
+    timeout=1
 )
 
 def conectar():
@@ -35,7 +32,7 @@ def conectar():
         return client.connect()
     return True
 
-# ================= SALIDA DIGITAL =================
+# ================= CONTROL MOTOR =================
 
 def encender_motor():
     global motor_encendido, ultimo_motivo
@@ -43,26 +40,26 @@ def encender_motor():
         return
     motor_encendido = True
     ultimo_motivo = "Arranque permitido"
-    print(">> MOTOR ENCENDIDO")
+    print(">> CONTROL: MOTOR ENCENDIDO")
 
 def apagar_motor(motivo):
-    global motor_encendido, ultimo_motivo, en_rearranque, tiempo_apagado
+    global motor_encendido, ultimo_motivo, en_rearranque, inicio_rearranque
     if not motor_encendido:
         return
     motor_encendido = False
     ultimo_motivo = motivo
     en_rearranque = True
-    tiempo_apagado = time.time()
-    print(f">> MOTOR APAGADO ({motivo})")
+    inicio_rearranque = time.time()
+    print(f">> CONTROL: MOTOR APAGADO ({motivo})")
 
-# ================= LÓGICA =================
+# ================= SISTEMA =================
 
 print("Sistema Pozo–Tanque iniciado")
 
 while True:
     try:
         if not conectar():
-            raise Exception("No se pudo abrir puerto Modbus")
+            raise Exception("No conecta Modbus")
 
         lectura = client.read_discrete_inputs(
             address=0,
@@ -78,20 +75,24 @@ while True:
 
         ahora = time.time()
 
-        # Rearranque
+        # ================= REARRANQUE =================
         if en_rearranque:
-            restante = TIEMPO_REARRANQUE - (ahora - tiempo_apagado)
+            transcurrido = ahora - inicio_rearranque
+            restante = TIEMPO_REARRANQUE - transcurrido
+
             if restante <= 0:
                 en_rearranque = False
             else:
                 print(
                     f"BAJO: {flotador_bajo} | ALTO: {flotador_alto} | "
-                    f"MOTOR: {'ENCENDIDO' if motor_encendido else 'APAGADO'} | "
+                    f"MOTOR: APAGADO | "
                     f"REARRANQUE: {int(restante)}s | "
                     f"ULTIMO: {ultimo_motivo}"
                 )
                 time.sleep(TIEMPO_CICLO)
                 continue
+
+        # ================= LÓGICA =================
 
         # Inconsistencia
         if flotador_alto and not flotador_bajo:
@@ -101,7 +102,7 @@ while True:
         elif flotador_bajo and flotador_alto:
             apagar_motor("Tanque lleno")
 
-        # Permitir arranque
+        # Condición de arranque
         elif not flotador_bajo and not flotador_alto:
             encender_motor()
 
