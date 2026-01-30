@@ -1,181 +1,139 @@
 #!/usr/bin/env python3
 import time
-import json
 import subprocess
-from pymodbus.client import ModbusSerialClient
+from pymodbus.client.serial import ModbusSerialClient
 
 # ================= CONFIGURACIÓN =================
+
 MODBUS_PORT = "/dev/ttyHS0"
 BAUDIOS = 9600
 ID_TANQUE = 32
 
-TIEMPO_ESPERA_CICLO = 5        # segundos entre chequeos
-RETARDO_ARRANQUE = 10           # segundos antes de encender bomba
+RETARDO_REARRANQUE = 120  # segundos
+CICLO = 2  # segundos
+
+# DO y DI Teltonika
+DO_BOMBA = "ioman.gpio.dio0"
+DI_MOTOR = "ioman.gpio.dio1"
+
+# ================= ESTADOS =================
+
+bomba_encendida = False
+ultimo_evento = "Inicio"
+tiempo_ultimo_cambio = 0
+rearranque_activo = False
+
+# ================= MODBUS =================
+
+client = ModbusSerialClient(
+    port=MODBUS_PORT,
+    baudrate=BAUDIOS,
+    timeout=2,
+    stopbits=1,
+    bytesize=8,
+    parity="N"
+)
 
 # ================= FUNCIONES =================
 
-def iniciar_cliente():
-    return ModbusSerialClient(
-        method='rtu',
-        port=MODBUS_PORT,
-        baudrate=BAUDIOS,
-        bytesize=8,
-        parity='N',
-        stopbits=1,
-        timeout=2,
-        retries=2,
-        handle_local_echo=False
+def set_bomba(encender: bool, motivo: str):
+    global bomba_encendida, ultimo_evento, tiempo_ultimo_cambio, rearranque_activo
+
+    if encender == bomba_encendida:
+        return  # No repetir orden
+
+    valor = "1" if encender else "0"
+    subprocess.call([
+        "ubus", "call", DO_BOMBA, "update",
+        f'{{"value":"{valor}"}}'
+    ])
+
+    bomba_encendida = encender
+    ultimo_evento = motivo
+    tiempo_ultimo_cambio = time.time()
+    rearranque_activo = not encender
+
+    estado = "ENCENDIDA" if encender else "APAGADA"
+    print(f"🔌 Bomba {estado} → {motivo}")
+
+def leer_motor():
+    try:
+        r = subprocess.check_output(
+            ["ubus", "call", DI_MOTOR, "status"],
+            text=True
+        )
+        return '"value": "1"' in r
+    except:
+        return None
+
+def leer_flotadores():
+    if not client.connect():
+        raise Exception("No conecta Modbus")
+
+    lectura = client.read_discrete_inputs(
+        address=0,
+        count=2,
+        device_id=ID_TANQUE
     )
 
-def conectar(client):
-    if not client.connected:
-        return client.connect()
-    return True
+    if lectura.isError():
+        raise Exception("Error Modbus lectura tanque")
 
-def reiniciar_conexion(client):
-    print("🔄 Reiniciando puerto Modbus...")
+    return lectura.bits[0], lectura.bits[1]
+
+# ================= MAIN =================
+
+print("Sistema Pozo–Tanque iniciado\n")
+
+while True:
     try:
-        client.close()
-    except:
-        pass
-    time.sleep(2)
-    client = iniciar_cliente()
-    conectar(client)
-    return client
+        bajo, alto = leer_flotadores()
+        motor = leer_motor()
 
-def set_bomba(valor: str):
-    """Control de salida digital dio0"""
-    try:
-        subprocess.run(
-            ["ubus", "call", "ioman.gpio.dio0", "update", f'{{"value":"{valor}"}}'],
-            check=True
-        )
-    except Exception as e:
-        print(f"\033[91m[ERROR] Acción bomba: {e}\033[0m")
+        ahora = time.time()
+        restante = max(0, RETARDO_REARRANQUE - (ahora - tiempo_ultimo_cambio))
 
-def leer_estado_motor():
-    """Lee el estado real del motor desde entrada digital dio1"""
-    try:
-        resultado = subprocess.run(
-            ["ubus", "call", "ioman.gpio.dio1", "status"],
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        data = json.loads(resultado.stdout)
-        valor = data.get("value", "0")
-        return valor == "1"
-    except:
-        return False
+        # ================= LÓGICA =================
 
-# ================= UTIL =================
-
-def formato_estado(estado: bool):
-    return f"\033[92mON \033[0m" if estado else f"\033[91mOFF\033[0m"
-
-def imprimir_log(fecha, bajo, alto, motor, bomba, motivo):
-    print(f"{fecha} | "
-          f"Bajo: {formato_estado(bajo)} | "
-          f"Alto: {formato_estado(alto)} | "
-          f"Motor: {formato_estado(motor)} | "
-          f"Bomba: {formato_estado(bomba)} | "
-          f"Motivo: {motivo}")
-
-# ================= LÓGICA PRINCIPAL =================
-
-def control_pozo():
-    client = iniciar_cliente()
-    conectar(client)
-
-    bomba_encendida = False
-    arranque_pendiente = False
-    tiempo_arranque = 0
-    motivo_ultimo_cambio = "Sistema iniciado"
-    errores_consecutivos = 0
-
-    print("\n🚰 Sistema Pozo–Tanque iniciado\n")
-    print("Timestamp           | Bajo | Alto | Motor | Bomba | Motivo")
-    print("-"*100)
-
-    while True:
-        try:
-            if not conectar(client):
-                raise Exception("Puerto serial no disponible")
-
-            # Lectura de flotadores por Modbus
-            lectura = client.read_discrete_inputs(address=0, count=2, unit=ID_TANQUE)
-            if lectura.isError():
-                raise Exception("Error Modbus lectura tanque")
-
-            errores_consecutivos = 0
-
-            bajo = lectura.bits[0]
-            alto = lectura.bits[1]
-            motor_estado = leer_estado_motor()
-
-            # ================= LOGICA DE CONTROL =================
-
-            # Tanque vacío → programar arranque
-            if not bajo and not alto and not bomba_encendida and not arranque_pendiente:
-                arranque_pendiente = True
-                tiempo_arranque = time.time()
-            
-            # Rearranque
-            motivo_arranque = ""
-            if arranque_pendiente:
-                tiempo_restante = max(0, RETARDO_ARRANQUE - (time.time() - tiempo_arranque))
-                motivo_arranque = f"Arranque programado ({int(tiempo_restante)}s restantes)"
-
-                if bajo or alto:
-                    motivo_ultimo_cambio = "Arranque cancelado (nivel cambió)"
-                    arranque_pendiente = False
-                elif time.time() - tiempo_arranque >= RETARDO_ARRANQUE:
-                    if not bomba_encendida:  # solo manda control si no está encendida
-                        set_bomba("1")
-                        bomba_encendida = True
-                        motivo_ultimo_cambio = "Tanque vacío → ENCENDIENDO bomba"
-                    arranque_pendiente = False
-
-            # Tanque lleno
-            if bajo and alto and bomba_encendida:
-                set_bomba("0")
-                bomba_encendida = False
-                motivo_ultimo_cambio = "Tanque lleno → APAGANDO bomba"
-
-            # Estado inválido flotadores
-            if not bajo and alto and bomba_encendida:
-                set_bomba("0")
-                bomba_encendida = False
-                motivo_ultimo_cambio = "Inconsistencia flotadores → APAGANDO bomba"
-
-            # ================= IMPRESIÓN EN CONSOLA =================
-            imprimir_log(
-                time.strftime("%Y-%m-%d %H:%M:%S"),
-                bajo,
-                alto,
-                motor_estado,
-                bomba_encendida,
-                motivo_arranque if arranque_pendiente else motivo_ultimo_cambio
-            )
-
-            time.sleep(TIEMPO_ESPERA_CICLO)
-
-        except Exception as e:
-            errores_consecutivos += 1
-            print(f"\033[91m[ERROR {errores_consecutivos}] {e}\033[0m")
+        # INCONSISTENCIA
+        if alto and not bajo:
             if bomba_encendida:
-                set_bomba("0")  # FAIL-SAFE
-                bomba_encendida = False
-                motivo_ultimo_cambio = "ERROR → FAIL-SAFE"
-            if errores_consecutivos >= 5:
-                client = reiniciar_conexion(client)
-                errores_consecutivos = 0
-            time.sleep(5)
+                set_bomba(False, "Inconsistencia flotadores")
+            accion = "INCONSISTENCIA"
 
-# ================= EJECUCIÓN =================
+        # TANQUE LLENO
+        elif bajo and alto:
+            if bomba_encendida:
+                set_bomba(False, "Tanque lleno")
+            accion = "TANQUE LLENO"
 
-if __name__ == "__main__":
-    try:
-        control_pozo()
-    except KeyboardInterrupt:
-        print("\n[INFO] Programa detenido manualmente")
+        # TANQUE VACÍO
+        elif not bajo and not alto:
+            if not bomba_encendida:
+                if rearranque_activo and restante > 0:
+                    accion = f"Rearranque en {int(restante)} s"
+                else:
+                    set_bomba(True, "Tanque vacío")
+                    accion = "ARRANQUE"
+            else:
+                accion = "OPERANDO"
+
+        else:
+            accion = "ESTADO INTERMEDIO"
+
+        # ================= LOG =================
+
+        print(
+            f"[{time.strftime('%H:%M:%S')}] "
+            f"Bajo:{bajo} Alto:{alto} | "
+            f"Motor:{motor} | "
+            f"Bomba:{'ON' if bomba_encendida else 'OFF'} | "
+            f"{accion} | Último: {ultimo_evento}"
+        )
+
+    except Exception as e:
+        print(f"❌ ERROR: {e}")
+        if bomba_encendida:
+            set_bomba(False, "Fail-safe Modbus")
+
+    time.sleep(CICLO)
