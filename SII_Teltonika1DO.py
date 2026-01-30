@@ -87,7 +87,7 @@ def main():
             motor = get_estado_motor()
 
             # ================= LOG INFO =================
-            status_msg = f"Flotador BAJO: {bajo} | Flotador ALTO: {alto} | Motor: {motor} | Bomba: {'Encendida' if bomba_encendida else 'Apagada'}"
+            status_msg = f"Flotadores | BAJO: {bajo} | ALTO: {alto} | Control Motor: {'Encendida' if bomba_encendida else 'Apagada'} | Estado de Motor {motor}"
             
             # ================= DETECCIÓN DE CAMBIO =================
             if bajo == last_bajo and alto == last_alto:
