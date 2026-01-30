@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import time
+import os
+import subprocess
 from datetime import datetime
 from pymodbus.client import ModbusSerialClient
 
@@ -8,17 +10,17 @@ PUERTO = "/dev/ttyHS0"
 BAUDIOS = 9600
 TIMEOUT = 2
 
-ID_TANQUE = 32
+ID_TANQUE = 32  # Modbus slave del tanque
 ID_POZO = 31
 
 REARRANQUE_SEGUNDOS = 120
 MAX_ERRORES = 5
 
-# Entrada digital del motor (solo lectura)
-ENTRADA_MOTOR = "/sys/class/gpio/gpio1/value"  # Ajusta según tu Teltonika
-
+SALIDA_BOMBA = "ioman.gpio.dio0"  # DO0 → control bomba
+ENTRADA_MOTOR = "/sys/class/gpio/gpio1/value"  # DO1 → estado motor (solo lectura)
 # ================================================
 
+# Inicializamos cliente Modbus
 client = ModbusSerialClient(port=PUERTO, baudrate=BAUDIOS, timeout=TIMEOUT, method="rtu")
 
 motor_encendido = False
@@ -54,17 +56,22 @@ def leer_estado_motor():
     except:
         return False
 
-def escribir_motor(estado):
+def set_bomba(estado):
     global motor_encendido, ultimo_cambio_motor
-    if estado == motor_encendido:
-        return
-    client.write_coil(address=0, value=estado, slave=ID_POZO)
-    motor_encendido = estado
-    ultimo_cambio_motor = time.time()
-    if estado:
-        log("🔵 MOTOR ENCENDIDO", "green")
-    else:
-        log(f"🔴 MOTOR APAGADO → {motivo_apagado}", "red")
+    valor = "1" if estado else "0"
+    try:
+        subprocess.run(
+            ["ubus", "call", SALIDA_BOMBA, "update", f'{{"value":"{valor}"}}'],
+            check=True, capture_output=True
+        )
+        motor_encendido = estado
+        ultimo_cambio_motor = time.time()
+        if estado:
+            log("🔵 BOMBA ENCENDIDA", "green")
+        else:
+            log(f"🔴 BOMBA APAGADA → {motivo_apagado}", "red")
+    except subprocess.CalledProcessError as e:
+        log(f"⚠ ERROR al cambiar bomba: {e}", "red")
 
 # ================== MAIN ==================
 
@@ -84,19 +91,21 @@ while True:
         # ======= APAGADOS =======
         if flotador_alto and flotador_bajo:
             motivo_apagado = "Tanque lleno"
-            escribir_motor(False)
+            if motor_encendido:
+                set_bomba(False)
         elif flotador_alto and not flotador_bajo:
             motivo_apagado = "Inconsistencia flotadores"
-            escribir_motor(False)
+            if motor_encendido:
+                set_bomba(False)
         # ======= ENCENDIDO =======
         elif not flotador_bajo and not flotador_alto:
             if not motor_encendido:
                 if ahora - ultimo_cambio_motor >= REARRANQUE_SEGUNDOS:
                     motivo_apagado = "Condición normal"
-                    escribir_motor(True)
+                    set_bomba(True)
                 else:
                     restante = int(REARRANQUE_SEGUNDOS - (ahora - ultimo_cambio_motor))
-                    log(f"⏳ Esperando re-arranque: {restante}s", "yellow")
+                    log(f"⏳ Esperando rearrranque: {restante}s", "yellow")
 
         # ======= LOG EN CONSOLA =======
         log(
@@ -112,5 +121,6 @@ while True:
         log(f"⚠ ERROR: {e}", "red")
         if errores_consecutivos >= MAX_ERRORES:
             motivo_apagado = "Protección por falla Modbus"
-            escribir_motor(False)
+            if motor_encendido:
+                set_bomba(False)
         time.sleep(3)
