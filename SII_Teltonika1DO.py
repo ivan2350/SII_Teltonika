@@ -9,10 +9,10 @@ MODBUS_PORT = "/dev/rs485"
 MODBUS_BAUD = 9600
 ID_TANQUE = 32
 
-RETARDO_REARRANQUE = 120      # segundos
+RETARDO_REARRANQUE = 120
 MAX_INTENTOS_MODBUS = 10
-CICLO_NORMAL = 2              # segundos
-CICLO_ERROR = 1               # segundos
+CICLO_NORMAL = 2
+CICLO_ERROR = 1
 
 # Teltonika
 DIO_CONTROL = "ioman.gpio.dio0"   # salida
@@ -20,8 +20,7 @@ DIO_ESTADO = "ioman.gpio.dio1"    # entrada
 
 # ================= ESTADO =================
 
-control_motor = False          # estado lógico del control
-estado_motor_sw = False        # estado inmediato (optimista)
+control_motor = False
 ultimo_motivo = "Inicio"
 ultimo_cambio_ts = 0
 
@@ -36,8 +35,11 @@ def ts():
     return time.strftime("%Y-%m-%d %H:%M:%S")
 
 def ubus_call(obj, method, params):
-    cmd = ["ubus", "call", obj, method, params]
-    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(
+        ["ubus", "call", obj, method, params],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL
+    )
 
 def leer_estado_motor():
     try:
@@ -50,7 +52,7 @@ def leer_estado_motor():
         return None
 
 def set_motor(on: bool, motivo: str):
-    global control_motor, estado_motor_sw, ultimo_motivo, ultimo_cambio_ts
+    global control_motor, ultimo_motivo, ultimo_cambio_ts
     global rearranque_activo, ts_rearranque
 
     if control_motor == on:
@@ -63,7 +65,6 @@ def set_motor(on: bool, motivo: str):
     )
 
     control_motor = on
-    estado_motor_sw = on
     ultimo_motivo = motivo
     ultimo_cambio_ts = time.time()
 
@@ -113,7 +114,7 @@ while True:
         flot_bajo = lectura.bits[0]
         flot_alto = lectura.bits[1]
 
-        motor_real = leer_estado_motor()
+        estado_motor = leer_estado_motor()
 
         ahora = time.time()
         restante = 0
@@ -128,38 +129,35 @@ while True:
         # ================= LÓGICA =================
 
         if not flot_bajo and not flot_alto:
-            # Tanque vacío
             if not control_motor and not rearranque_activo:
                 set_motor(True, "Tanque vacío")
 
         elif flot_bajo and flot_alto:
-            # Tanque lleno
             if control_motor:
                 set_motor(False, "Tanque lleno")
 
         elif flot_alto and not flot_bajo:
-            # Inconsistencia
             if control_motor:
                 set_motor(False, "Inconsistencia flotadores")
 
         # ================= CONSOLA =================
 
-        estado_manual = ""
-        if control_motor is False and motor_real is True:
-            estado_manual = " ⚠ MANUAL"
+        estado_txt = "DESCONOCIDO" if estado_motor is None else (
+            "ON" if estado_motor else "OFF"
+        )
 
         print(
             f"[{ts()}] "
             f"Flotadores → Bajo:{int(flot_bajo)} Alto:{int(flot_alto)} | "
             f"Control:{'ON' if control_motor else 'OFF'} | "
-            f"Motor:{'ON' if estado_motor_sw else 'OFF'}{estado_manual} | "
+            f"Motor:{estado_txt} | "
             f"Rearranque:{restante}s | "
             f"Motivo:{ultimo_motivo}"
         )
 
         time.sleep(CICLO_NORMAL)
 
-    except Exception as e:
+    except Exception:
         errores_modbus += 1
         print(f"[{ts()}] ❌ ERROR Modbus ({errores_modbus}/{MAX_INTENTOS_MODBUS})")
 
