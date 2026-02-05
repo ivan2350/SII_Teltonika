@@ -9,19 +9,19 @@ MODBUS_PORT = "/dev/rs485"
 BAUDRATE = 9600
 SLAVE_ID = 32
 
-RETARDO_REARRANQUE = 120
-INTERVALO_NORMAL = 2
-INTERVALO_ERROR = 1
-MAX_FALLOS_MODBUS = 10
+RETARDO_REARRANQUE = 120    # segundos
+INTERVALO_NORMAL = 60       # segundos
+INTERVALO_ERROR = 1         # segundos
+MAX_FALLOS_MODBUS = 10          # reintentos antes de reiniciar     
 
 # ================= ESTADO =================
 
-control_motor = False
-ultimo_motivo = "Inicio"
-ultimo_cambio_ts = None
+control_motor = False                   # Estado actual del control del motor
+ultimo_motivo = "Inicio"            # Último motivo de cambio de estado
+ultimo_cambio_ts = None             # Timestamp del último cambio de estado
 
-fallos_modbus = 0
-intervalo_actual = INTERVALO_NORMAL
+fallos_modbus = 0                   # Contador de fallos Modbus
+intervalo_actual = INTERVALO_NORMAL     # Intervalo de espera actual
 
 # ================= UTIL =================
 
