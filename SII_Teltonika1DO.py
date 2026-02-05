@@ -9,7 +9,7 @@ MODBUS_PORT = "/dev/rs485"
 BAUDRATE = 9600
 SLAVE_ID = 32
 
-RETARDO_REARRANQUE = 120    # segundos
+RETARDO_REARRANQUE = 180    # segundos
 INTERVALO_NORMAL = 60       # segundos
 INTERVALO_ERROR = 1         # segundos
 MAX_FALLOS_MODBUS = 10          # reintentos antes de reiniciar     
