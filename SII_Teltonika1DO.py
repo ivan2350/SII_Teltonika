@@ -9,9 +9,9 @@ MODBUS_PORT = "/dev/rs485"
 MODBUS_BAUD = 9600
 ID_TANQUE = 32
 
-RETARDO_REARRANQUE = 120
-MAX_INTENTOS_MODBUS = 10
-CICLO_NORMAL = 2
+RETARDO_REARRANQUE = 120    # segundos
+MAX_INTENTOS_MODBUS = 10                        
+CICLO_NORMAL = 60   # segundos
 CICLO_ERROR = 1
 
 # Teltonika
@@ -32,7 +32,7 @@ errores_modbus = 0
 # ================= UTILIDADES =================
 
 def ts():
-    return time.strftime("%Y-%m-%d %H:%M:%S")
+    return time.strftime("%d-%m-%Y %H:%M:%S")
 
 def ubus_call(obj, method, params):
     subprocess.run(
