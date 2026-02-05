@@ -1,114 +1,144 @@
 #!/usr/bin/env python3
 import time
+from pymodbus.client import ModbusSerialClient
 
 # ================= CONFIGURACIÓN =================
 
-TIEMPO_REARRANQUE = 300   # segundos (ej. 5 minutos)
-INTERVALO_LOOP = 1        # segundos
+PUERTO_RS485 = "/dev/ttyRS485"
+BAUDIOS = 9600
+ID_TANQUE = 32
+
+REARRANQUE_SEG = 300  # 5 minutos
+
+# GPIO Teltonika (AJUSTA SI ES NECESARIO)
+GPIO_MOTOR_DI = "/sys/class/gpio/gpio1/value"   # Estado real del motor
+GPIO_MOTOR_DO = "/sys/class/gpio/gpio0/value"   # Relay bomba
+
+# =================================================
+
+def leer_gpio(path):
+    with open(path, "r") as f:
+        return f.read().strip() == "1"
+
+def escribir_gpio(path, valor):
+    with open(path, "w") as f:
+        f.write("1" if valor else "0")
+
+def leer_DI_motor():
+    return leer_gpio(GPIO_MOTOR_DI)
+
+def motor_encender():
+    escribir_gpio(GPIO_MOTOR_DO, True)
+
+def motor_apagar():
+    escribir_gpio(GPIO_MOTOR_DO, False)
+
+def conectar(client):
+    if not client.connect():
+        return False
+    return True
+
+# ================= MODBUS =================
+
+client = ModbusSerialClient(
+    method="rtu",
+    port=PUERTO_RS485,
+    baudrate=BAUDIOS,
+    timeout=2
+)
 
 # ================= ESTADOS =================
 
-motor_DO = False          # Salida digital (control automático)
-motor_DI = False          # Entrada digital (estado real)
+motor_DO = False
+ultimo_motivo = "—"
 en_rearranque = False
 fin_rearranque = 0
 
-# ================= FUNCIONES HARDWARE =================
-# 🔧 ADAPTA ESTAS FUNCIONES A TU SISTEMA REAL
-
-def leer_DI_motor():
-    """
-    Retorna True si el motor está ENCENDIDO (DI)
-    """
-    # EJEMPLO:
-    # return ioman.gpio.input(DI_MOTOR)
-    return motor_DI_simulado()
-
-
-def leer_flotadores():
-    """
-    Retorna:
-    - True  → nivel ALTO (debe encender)
-    - False → nivel BAJO (debe apagar)
-    """
-    # EJEMPLO:
-    # return ioman.gpio.input(FLOTADOR_ALTO)
-    return flotador_simulado()
-
-
-def DO_motor(estado):
-    """
-    Controla la salida digital del motor
-    """
-    global motor_DO
-    motor_DO = estado
-    # EJEMPLO:
-    # gpio.output(DO_MOTOR, estado)
-
-# ================= CONTROL MOTOR =================
-
-def encender_motor():
-    global motor_DO
-    if not motor_DO:
-        DO_motor(True)
-        print("🟢 Motor ENCENDIDO (automático)")
-
-
-def apagar_motor():
-    global en_rearranque, fin_rearranque
-
-    if motor_DO:
-        DO_motor(False)
-        en_rearranque = True
-        fin_rearranque = time.time() + TIEMPO_REARRANQUE
-        print("🔴 Motor APAGADO (automático)")
-        print(f"⏳ Rearranque iniciado ({TIEMPO_REARRANQUE} s)")
-
+print("🚀 Sistema Pozo–Tanque iniciado")
 
 # ================= LOOP PRINCIPAL =================
 
-print("🚀 Sistema de control iniciado")
-
 while True:
-    ahora = time.time()
+    try:
+        if not conectar(client):
+            raise Exception("No conecta Modbus")
 
-    # ----- Lecturas SIEMPRE activas -----
-    motor_DI = leer_DI_motor()
-    flotador_alto = leer_flotadores()
+        lectura = client.read_discrete_inputs(
+            address=0,
+            count=2,
+            device_id=ID_TANQUE
+        )
 
-    # ----- Fin de rearranque -----
-    if en_rearranque and ahora >= fin_rearranque:
-        en_rearranque = False
-        print("✅ Rearranque finalizado (esperando flotadores)")
+        if lectura.isError():
+            raise Exception("Error lectura flotadores")
 
-    # ----- Control AUTOMÁTICO -----
-    if not en_rearranque:
-        if flotador_alto and not motor_DO:
-            encender_motor()
+        flotador_bajo = lectura.bits[0]
+        flotador_alto = lectura.bits[1]
 
-        elif not flotador_alto and motor_DO:
-            apagar_motor()
+        motor_DI = leer_DI_motor()
+        ahora = time.time()
 
-    # ----- ALERTA MANUAL -----
-    if motor_DI and not motor_DO:
-        print("⚠️ ALERTA: Motor ENCENDIDO en MANUAL (DI=ON / DO=OFF)")
+        # ================= ESTADO MANUAL =================
+        if not motor_DO and motor_DI:
+            estado_manual = "⚠️ MANUAL ACTIVO"
+        else:
+            estado_manual = "OK"
 
-    # ----- Estado informativo -----
-    print(
-        f"📊 Estado | "
-        f"DO={'ON' if motor_DO else 'OFF'} | "
-        f"DI={'ON' if motor_DI else 'OFF'} | "
-        f"Flotador={'ALTO' if flotador_alto else 'BAJO'} | "
-        f"Rearranque={'SI' if en_rearranque else 'NO'}"
-    )
+        # ================= REARRANQUE =================
+        if en_rearranque:
+            restante = int(fin_rearranque - ahora)
+            if restante <= 0:
+                en_rearranque = False
+            else:
+                print(
+                    f"⏳ REARRANQUE {restante}s | "
+                    f"Bajo:{flotador_bajo} Alto:{flotador_alto} | "
+                    f"Motor DI:{motor_DI} | Motivo:{ultimo_motivo}"
+                )
+                time.sleep(1)
+                continue
 
-    time.sleep(INTERVALO_LOOP)
+        # ================= LÓGICA AUTOMÁTICA =================
 
-# ================== SIMULADORES ==================
-# ❌ ELIMINA ESTO EN PRODUCCIÓN
+        # Inconsistencia
+        if flotador_alto and not flotador_bajo:
+            if motor_DO:
+                motor_apagar()
+                motor_DO = False
+                ultimo_motivo = "Inconsistencia flotadores"
+                en_rearranque = True
+                fin_rearranque = ahora + REARRANQUE_SEG
 
-def motor_DI_simulado():
-    return motor_DO  # simula que el motor sigue al DO
+        # Tanque lleno
+        elif flotador_bajo and flotador_alto:
+            if motor_DO:
+                motor_apagar()
+                motor_DO = False
+                ultimo_motivo = "Tanque lleno"
+                en_rearranque = True
+                fin_rearranque = ahora + REARRANQUE_SEG
 
-def flotador_simulado():
-    return True  # cambia a False para simular nivel bajo
+        # Tanque bajo
+        elif not flotador_bajo and not flotador_alto:
+            if not motor_DO:
+                motor_encender()
+                motor_DO = True
+                ultimo_motivo = "Nivel bajo"
+
+        # ================= CONSOLA =================
+
+        print(
+            f"Bajo:{flotador_bajo} | Alto:{flotador_alto} | "
+            f"Motor DO:{motor_DO} | Motor DI:{motor_DI} | "
+            f"Estado:{estado_manual} | Motivo:{ultimo_motivo}"
+        )
+
+        time.sleep(1)
+
+    except Exception as e:
+        print(f"❌ ERROR: {e}")
+        if motor_DO:
+            motor_apagar()
+            motor_DO = False
+            ultimo_motivo = "Fail-safe"
+        time.sleep(2)
