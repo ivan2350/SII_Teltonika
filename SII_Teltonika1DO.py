@@ -4,7 +4,7 @@ from pymodbus.client import ModbusSerialClient
 
 # ================= CONFIGURACIÓN =================
 
-PUERTO_RS485 = "/dev/ttyRS485"
+PUERTO_RS485 = "/dev/ttyHS0"
 BAUDIOS = 9600
 ID_TANQUE = 32
 
