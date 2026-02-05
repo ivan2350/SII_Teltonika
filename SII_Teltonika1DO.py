@@ -54,6 +54,12 @@ def set_motor(on: bool, motivo=None):
     if motivo:
         ultimo_motivo = motivo
 
+    # 🔔 EVENTO EXPLÍCITO
+    print(
+        f"[{ts()}] 🔔 EVENTO: Control de motor "
+        f"{'ENCENDIDO' if on else 'APAGADO'} | Motivo: {ultimo_motivo}"
+    )
+
 def leer_motor_estado():
     try:
         out = ubus_call("ioman.gpio.dio1", "status")
@@ -85,7 +91,6 @@ client = crear_cliente()
 while True:
     try:
         motor_estado = leer_motor_estado()
-
         bajo, alto = leer_flotadores(client)
 
         # ✔ Modbus OK
@@ -106,15 +111,14 @@ while True:
 
         elif not bajo and not alto:
             if not control_motor:
-                if ultimo_cambio_ts is None:
-                    listo = True
-                else:
-                    listo = (ahora - ultimo_cambio_ts) >= RETARDO_REARRANQUE
-
+                listo = (
+                    ultimo_cambio_ts is None or
+                    (ahora - ultimo_cambio_ts) >= RETARDO_REARRANQUE
+                )
                 if listo:
                     set_motor(True, "Tanque vacío")
 
-        # ===== IMPRESIÓN =====
+        # ===== ESTADO =====
 
         restante = 0
         if not control_motor and ultimo_cambio_ts:
@@ -125,14 +129,14 @@ while True:
 
         print(
             f"[{ts()}] "
-            f"Bajo:{int(bajo)} Alto:{int(alto)} | "
+            f"Flotadores → Bajo:{int(bajo)} Alto:{int(alto)} | "
             f"Control:{'ON' if control_motor else 'OFF'} | "
             f"Motor:{'ON' if motor_estado else 'OFF'} | "
             f"Rearranque:{restante}s | "
             f"Motivo:{ultimo_motivo}"
         )
 
-    except Exception as e:
+    except Exception:
         fallos_modbus += 1
         intervalo_actual = INTERVALO_ERROR
 
