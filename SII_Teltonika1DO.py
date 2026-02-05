@@ -1,141 +1,104 @@
 #!/usr/bin/env python3
 import time
-import subprocess
-from datetime import datetime
-from pymodbus.client import ModbusSerialClient
+from pymodbus.client.sync import ModbusSerialClient
 
-# ================= CONFIG =================
-MODBUS_PORT = "/dev/rs485"
-BAUDRATE = 9600
-ID_TANQUE = 32
+# ================= CONFIGURACIÓN =================
 
-RETARDO_REARRANQUE = 120
-MAX_ERRORES_MODBUS = 10
-INTERVALO = 1
+PUERTO = "/dev/ttyHS0"
+BAUDIOS = 9600
+SLAVE_ID = 1
 
-# =========================================
+# DIOs
+DIO_CONTROL = 0   # DIO0 -> Control motor/bomba
+DIO_ESTADO  = 1   # DIO1 -> Estado motor/bomba
 
-client = ModbusSerialClient(
-    port=MODBUS_PORT,
-    baudrate=BAUDRATE,
-    parity="N",
-    stopbits=1,
-    bytesize=8,
-    timeout=1
-)
+TIEMPO_REARRANQUE = 300     # segundos (ej. 5 minutos)
+INTERVALO_CICLO   = 2       # segundos entre lecturas
+MAX_INTENTOS_MODBUS = 10
 
-# ========== ESTADOS ==========
-control_motor = False          # DIO0
-tiempo_apagado = None          # SOLO cuando se apaga
-motivo_ultimo_evento = "Inicio del sistema"
-errores_modbus = 0
-# =============================
+# ================================================
 
-# ---------- UBUS -------------
-def set_motor(valor: bool):
-    v = "1" if valor else "0"
-    subprocess.run(
-        ["ubus", "call", "ioman.gpio.dio0", "update", f'{{"value":"{v}"}}'],
-        check=False
+def crear_cliente():
+    return ModbusSerialClient(
+        method="rtu",
+        port=PUERTO,
+        baudrate=BAUDIOS,
+        timeout=1,
+        parity='N',
+        stopbits=1,
+        bytesize=8
     )
 
-def leer_motor_DI():
-    try:
-        r = subprocess.check_output(
-            ["ubus", "call", "ioman.gpio.dio1", "status"],
-            text=True
-        )
-        return '"value": "1"' in r
-    except Exception:
-        return False
-# -----------------------------
+cliente = crear_cliente()
+cliente.connect()
 
-# ---------- MODBUS ----------
-def leer_flotadores():
-    global errores_modbus
+intentos_modbus = 0
+falla_modbus = False
 
-    if not client.connect():
-        errores_modbus += 1
-        return None
+ultimo_control = None
+inicio_rearranque = None
 
-    r = client.read_discrete_inputs(0, 2, device_id=ID_TANQUE)
-
-    if r.isError():
-        errores_modbus += 1
-        return None
-
-    errores_modbus = 0
-    return r.bits[0], r.bits[1]
-# ----------------------------
-
-# -------- CONTROL ----------
-def encender_motor(motivo):
-    global control_motor, motivo_ultimo_evento
-    if not control_motor:
-        set_motor(True)
-        control_motor = True
-        motivo_ultimo_evento = motivo
-
-def apagar_motor(motivo):
-    global control_motor, tiempo_apagado, motivo_ultimo_evento
-    if control_motor:
-        set_motor(False)
-        control_motor = False
-        tiempo_apagado = time.time()   # ⬅️ AQUÍ inicia el rearranque
-        motivo_ultimo_evento = motivo
-
-def tiempo_rearranque_restante():
-    if control_motor or tiempo_apagado is None:
-        return 0
-    restante = RETARDO_REARRANQUE - (time.time() - tiempo_apagado)
-    return max(0, int(restante))
-# ----------------------------
-
-# -------- LOG --------------
-def imprimir_estado(bajo, alto, motor_di):
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print("\n" + "-"*55)
-    print(f"[{ts}] Sistema Pozo–Tanque")
-    print(f"Flotadores → Bajo:{int(bajo)} | Alto:{int(alto)}")
-    print(f"Control motor (DIO0): {'ENCENDIDO' if control_motor else 'APAGADO'}")
-    print(f"Estado motor  (DIO1): {'ENCENDIDO' if motor_di else 'APAGADO'}")
-
-    if not control_motor and motor_di:
-        print("⚠ Motor encendido manualmente")
-
-    if not control_motor and tiempo_rearranque_restante() > 0:
-        print(f"⏳ Rearranque en {tiempo_rearranque_restante()} s")
-
-    print(f"Motivo último evento: {motivo_ultimo_evento}")
-    print("-"*55)
-# ----------------------------
-
-print("🚀 Sistema Pozo–Tanque iniciado")
+print(">>> Sistema de control iniciado")
 
 while True:
-    flot = leer_flotadores()
+    try:
+        rr = cliente.read_coils(DIO_CONTROL, 2, unit=SLAVE_ID)
 
-    if flot is None:
-        if errores_modbus >= MAX_ERRORES_MODBUS:
-            apagar_motor("Falla comunicación Modbus")
-        time.sleep(INTERVALO)
-        continue
+        if rr.isError():
+            raise Exception("Error Modbus")
 
-    bajo, alto = flot
-    motor_di = leer_motor_DI()
+        intentos_modbus = 0
+        if falla_modbus:
+            print("✔ Comunicación Modbus restablecida")
+            falla_modbus = False
 
-    # Inconsistencia
-    if alto and not bajo:
-        apagar_motor("Inconsistencia flotadores")
+        control = rr.bits[0]  # DIO0
+        estado  = rr.bits[1]  # DIO1
 
-    # Tanque lleno
-    elif bajo and alto:
-        apagar_motor("Tanque lleno")
+        print(f"Control: {control} | Estado: {estado}")
 
-    # Tanque vacío
-    elif not bajo and not alto:
-        if not control_motor and tiempo_rearranque_restante() == 0:
-            encender_motor("Tanque vacío")
+        # ================= LÓGICA DE REARRANQUE =================
 
-    imprimir_estado(bajo, alto, motor_di)
-    time.sleep(INTERVALO)
+        if not control:
+            # Control APAGADO → puede iniciar conteo
+            if ultimo_control is True:
+                inicio_rearranque = time.time()
+                print("⏱ Control apagado, inicia conteo de rearranque")
+
+            if inicio_rearranque is not None:
+                tiempo_transcurrido = time.time() - inicio_rearranque
+                restante = TIEMPO_REARRANQUE - tiempo_transcurrido
+
+                if restante > 0:
+                    print(f"⏳ Rearranque disponible en {int(restante)} s")
+                else:
+                    print("✅ Rearranque permitido")
+        else:
+            # Control ENCENDIDO → se cancela conteo
+            inicio_rearranque = None
+
+        ultimo_control = control
+
+    except Exception as e:
+        intentos_modbus += 1
+
+        if not falla_modbus:
+            print("⚠ Falla de comunicación Modbus")
+            falla_modbus = True
+
+        print(f"Intento Modbus fallido #{intentos_modbus}")
+
+        # ===== Reinicio del puerto Modbus en intento 10 =====
+        if intentos_modbus >= MAX_INTENTOS_MODBUS:
+            print("🔄 Reiniciando puerto Modbus...")
+            try:
+                cliente.close()
+                time.sleep(2)
+                cliente = crear_cliente()
+                cliente.connect()
+                intentos_modbus = 0
+                print("🔁 Puerto Modbus reiniciado")
+            except Exception as ex:
+                print("❌ Error al reiniciar Modbus:", ex)
+
+    time.sleep(INTERVALO_CICLO)
