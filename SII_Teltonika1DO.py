@@ -48,7 +48,7 @@ def leer_motor_DI():
     try:
         salida = subprocess.check_output([
             "ubus", "call",
-            "ioman.gpio.dio0",
+            "ioman.gpio.dio1",
             "status"
         ]).decode()
 
