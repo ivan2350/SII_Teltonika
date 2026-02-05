@@ -1,144 +1,174 @@
 #!/usr/bin/env python3
 import time
+import json
+import subprocess
 from pymodbus.client import ModbusSerialClient
 
-# ================= CONFIGURACIÓN =================
+# ================== CONFIGURACIÓN ==================
 
-PUERTO_RS485 = "/dev/ttyHS0"
-BAUDIOS = 9600
+MODBUS_PORT = "/dev/ttyHS0"     # RS485 Teltonika
+MODBUS_BAUD = 9600
 ID_TANQUE = 32
 
-REARRANQUE_SEG = 300  # 5 minutos
+RETARDO_REARRANQUE = 120        # segundos
+CICLO = 2                       # segundos
 
-# GPIO Teltonika (AJUSTA SI ES NECESARIO)
-GPIO_MOTOR_DI = "/sys/class/gpio/gpio1/value"   # Estado real del motor
-GPIO_MOTOR_DO = "/sys/class/gpio/gpio0/value"   # Relay bomba
+# ===================================================
 
-# =================================================
+# ----------- ESTADO DEL SISTEMA --------------------
 
-def leer_gpio(path):
-    with open(path, "r") as f:
-        return f.read().strip() == "1"
+bomba_encendida = False
+ultimo_control = None           # "ON" / "OFF"
+motivo_ultimo = "Inicio"
+t_ultimo_control = 0
 
-def escribir_gpio(path, valor):
-    with open(path, "w") as f:
-        f.write("1" if valor else "0")
+# --------------------------------------------------
 
-def leer_DI_motor():
-    return leer_gpio(GPIO_MOTOR_DI)
 
-def motor_encender():
-    escribir_gpio(GPIO_MOTOR_DO, True)
+def log(msg):
+    ts = time.strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{ts}] {msg}")
 
-def motor_apagar():
-    escribir_gpio(GPIO_MOTOR_DO, False)
 
-def conectar(client):
-    if not client.connect():
-        return False
-    return True
+# ---------------- DO CONTROL -----------------------
 
-# ================= MODBUS =================
+def set_bomba(encender: bool):
+    valor = "1" if encender else "0"
+    subprocess.call([
+        "ubus", "call",
+        "ioman.gpio.dio0",
+        "update",
+        f'{{"value":"{valor}"}}'
+    ])
 
-client = ModbusSerialClient(
-    method="rtu",
-    port=PUERTO_RS485,
-    baudrate=BAUDIOS,
-    timeout=2
-)
 
-# ================= ESTADOS =================
+# ---------------- DI MOTOR -------------------------
 
-motor_DO = False
-ultimo_motivo = "—"
-en_rearranque = False
-fin_rearranque = 0
-
-print("🚀 Sistema Pozo–Tanque iniciado")
-
-# ================= LOOP PRINCIPAL =================
-
-while True:
+def leer_motor_DI():
     try:
-        if not conectar(client):
-            raise Exception("No conecta Modbus")
+        salida = subprocess.check_output([
+            "ubus", "call",
+            "ioman.gpio.dio0",
+            "status"
+        ]).decode()
 
-        lectura = client.read_discrete_inputs(
-            address=0,
-            count=2,
-            device_id=ID_TANQUE
-        )
-
-        if lectura.isError():
-            raise Exception("Error lectura flotadores")
-
-        flotador_bajo = lectura.bits[0]
-        flotador_alto = lectura.bits[1]
-
-        motor_DI = leer_DI_motor()
-        ahora = time.time()
-
-        # ================= ESTADO MANUAL =================
-        if not motor_DO and motor_DI:
-            estado_manual = "⚠️ MANUAL ACTIVO"
-        else:
-            estado_manual = "OK"
-
-        # ================= REARRANQUE =================
-        if en_rearranque:
-            restante = int(fin_rearranque - ahora)
-            if restante <= 0:
-                en_rearranque = False
-            else:
-                print(
-                    f"⏳ REARRANQUE {restante}s | "
-                    f"Bajo:{flotador_bajo} Alto:{flotador_alto} | "
-                    f"Motor DI:{motor_DI} | Motivo:{ultimo_motivo}"
-                )
-                time.sleep(1)
-                continue
-
-        # ================= LÓGICA AUTOMÁTICA =================
-
-        # Inconsistencia
-        if flotador_alto and not flotador_bajo:
-            if motor_DO:
-                motor_apagar()
-                motor_DO = False
-                ultimo_motivo = "Inconsistencia flotadores"
-                en_rearranque = True
-                fin_rearranque = ahora + REARRANQUE_SEG
-
-        # Tanque lleno
-        elif flotador_bajo and flotador_alto:
-            if motor_DO:
-                motor_apagar()
-                motor_DO = False
-                ultimo_motivo = "Tanque lleno"
-                en_rearranque = True
-                fin_rearranque = ahora + REARRANQUE_SEG
-
-        # Tanque bajo
-        elif not flotador_bajo and not flotador_alto:
-            if not motor_DO:
-                motor_encender()
-                motor_DO = True
-                ultimo_motivo = "Nivel bajo"
-
-        # ================= CONSOLA =================
-
-        print(
-            f"Bajo:{flotador_bajo} | Alto:{flotador_alto} | "
-            f"Motor DO:{motor_DO} | Motor DI:{motor_DI} | "
-            f"Estado:{estado_manual} | Motivo:{ultimo_motivo}"
-        )
-
-        time.sleep(1)
+        data = json.loads(salida)
+        return data.get("value") == "1"
 
     except Exception as e:
-        print(f"❌ ERROR: {e}")
-        if motor_DO:
-            motor_apagar()
-            motor_DO = False
-            ultimo_motivo = "Fail-safe"
-        time.sleep(2)
+        log(f"⚠ ERROR leyendo estado motor: {e}")
+        return False
+
+
+# ---------------- MODBUS ---------------------------
+
+def conectar_modbus():
+    client = ModbusSerialClient(
+        port=MODBUS_PORT,
+        baudrate=MODBUS_BAUD,
+        timeout=1
+    )
+    return client if client.connect() else None
+
+
+def leer_flotadores(client):
+    lectura = client.read_discrete_inputs(
+        address=0,
+        count=2,
+        device_id=ID_TANQUE
+    )
+
+    if lectura.isError():
+        raise Exception("Error Modbus lectura flotadores")
+
+    return lectura.bits[0], lectura.bits[1]   # bajo, alto
+
+
+# ================== MAIN ===========================
+
+log("🚀 Sistema Pozo–Tanque iniciado")
+
+client = None
+
+try:
+    while True:
+
+        # ---------- MODBUS ----------
+        if not client:
+            client = conectar_modbus()
+            if not client:
+                log("❌ ERROR: No conecta Modbus")
+                time.sleep(5)
+                continue
+
+        try:
+            bajo, alto = leer_flotadores(client)
+        except Exception as e:
+            log(f"❌ {e}")
+            client.close()
+            client = None
+            continue
+
+        # ---------- MOTOR DI ----------
+        motor_DI = leer_motor_DI()
+
+        # ---------- ESTADO ----------
+        log(
+            f"Flotador BAJO: {bajo} | "
+            f"Flotador ALTO: {alto} | "
+            f"Motor: {'ENCENDIDO' if motor_DI else 'APAGADO'}"
+        )
+
+        # ---------- ALERTA MANUAL ----------
+        if not bomba_encendida and motor_DI:
+            log("⚠ ALERTA: Motor encendido en MANUAL (DO=OFF, DI=ON)")
+
+        ahora = time.time()
+        en_rearranque = (
+            ultimo_control == "OFF" and
+            (ahora - t_ultimo_control) < RETARDO_REARRANQUE
+        )
+
+        if en_rearranque:
+            restante = int(RETARDO_REARRANQUE - (ahora - t_ultimo_control))
+            log(f"⏳ Rearranque activo ({restante}s) – Motivo: {motivo_ultimo}")
+            time.sleep(CICLO)
+            continue
+
+        # ========== LÓGICA DE CONTROL ==========
+
+        # TANQUE LLENO
+        if bajo and alto and bomba_encendida:
+            set_bomba(False)
+            bomba_encendida = False
+            ultimo_control = "OFF"
+            motivo_ultimo = "Tanque lleno"
+            t_ultimo_control = ahora
+            log("🛑 Bomba APAGADA – Tanque lleno")
+
+        # INCONSISTENCIA
+        elif alto and not bajo and bomba_encendida:
+            set_bomba(False)
+            bomba_encendida = False
+            ultimo_control = "OFF"
+            motivo_ultimo = "Inconsistencia flotadores"
+            t_ultimo_control = ahora
+            log("🛑 Bomba APAGADA – Inconsistencia flotadores")
+
+        # TANQUE VACÍO
+        elif not bajo and not alto and not bomba_encendida:
+            set_bomba(True)
+            bomba_encendida = True
+            ultimo_control = "ON"
+            motivo_ultimo = "Tanque vacío"
+            t_ultimo_control = ahora
+            log("▶️ Bomba ENCENDIDA – Tanque vacío")
+
+        time.sleep(CICLO)
+
+except KeyboardInterrupt:
+    log("🛑 Programa detenido manualmente")
+
+finally:
+    if client:
+        client.close()
