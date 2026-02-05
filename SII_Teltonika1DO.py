@@ -13,7 +13,7 @@ DIO_CONTROL = 0   # DIO0 -> Control motor/bomba
 DIO_ESTADO  = 1   # DIO1 -> Estado motor/bomba
 
 TIEMPO_REARRANQUE = 300     # segundos (ej. 5 minutos)
-INTERVALO_CICLO   = 2       # segundos entre lecturas
+INTERVALO_CICLO   = 10       # segundos entre lecturas
 MAX_INTENTOS_MODBUS = 10
 
 # ================================================
