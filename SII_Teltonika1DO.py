@@ -26,7 +26,7 @@ intervalo_actual = INTERVALO_NORMAL     # Intervalo de espera actual
 # ================= UTIL =================
 
 def ts():
-    return time.strftime("%Y-%m-%d %H:%M:%S")
+    return time.strftime("%d-%m-%y %H:%M:%S")
 
 def ubus_call(path, method, data=None):
     cmd = ["ubus", "call", path, method]
