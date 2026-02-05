@@ -9,9 +9,9 @@ MODBUS_PORT = "/dev/rs485"
 BAUDRATE = 9600
 ID_TANQUE = 32
 
-RETARDO_REARRANQUE = 120      # segundos
+RETARDO_REARRANQUE = 120
 MAX_ERRORES_MODBUS = 10
-INTERVALO_LECTURA = 1         # segundos
+INTERVALO = 1
 
 # =========================================
 
@@ -24,22 +24,22 @@ client = ModbusSerialClient(
     timeout=1
 )
 
-# ====== ESTADOS ======
-control_motor = False
-ultimo_cambio = None
-motivo_ultimo_cambio = "Inicio del sistema"
+# ========== ESTADOS ==========
+control_motor = False          # DIO0
+tiempo_apagado = None          # SOLO cuando se apaga
+motivo_ultimo_evento = "Inicio del sistema"
 errores_modbus = 0
+# =============================
 
-# ==================== UBUS ====================
-
-def ubus_set_dio0(valor: bool):
+# ---------- UBUS -------------
+def set_motor(valor: bool):
     v = "1" if valor else "0"
     subprocess.run(
         ["ubus", "call", "ioman.gpio.dio0", "update", f'{{"value":"{v}"}}'],
         check=False
     )
 
-def leer_dio1():
+def leer_motor_DI():
     try:
         r = subprocess.check_output(
             ["ubus", "call", "ioman.gpio.dio1", "status"],
@@ -48,9 +48,9 @@ def leer_dio1():
         return '"value": "1"' in r
     except Exception:
         return False
+# -----------------------------
 
-# ================= MODBUS ====================
-
+# ---------- MODBUS ----------
 def leer_flotadores():
     global errores_modbus
 
@@ -58,91 +58,84 @@ def leer_flotadores():
         errores_modbus += 1
         return None
 
-    lectura = client.read_discrete_inputs(
-        address=0,
-        count=2,
-        device_id=ID_TANQUE
-    )
+    r = client.read_discrete_inputs(0, 2, device_id=ID_TANQUE)
 
-    if lectura.isError():
+    if r.isError():
         errores_modbus += 1
         return None
 
     errores_modbus = 0
-    return lectura.bits[0], lectura.bits[1]
+    return r.bits[0], r.bits[1]
+# ----------------------------
 
-# ================= CONTROL ===================
-
+# -------- CONTROL ----------
 def encender_motor(motivo):
-    global control_motor, ultimo_cambio, motivo_ultimo_cambio
+    global control_motor, motivo_ultimo_evento
     if not control_motor:
-        ubus_set_dio0(True)
+        set_motor(True)
         control_motor = True
-        ultimo_cambio = time.time()
-        motivo_ultimo_cambio = motivo
+        motivo_ultimo_evento = motivo
 
 def apagar_motor(motivo):
-    global control_motor, ultimo_cambio, motivo_ultimo_cambio
+    global control_motor, tiempo_apagado, motivo_ultimo_evento
     if control_motor:
-        ubus_set_dio0(False)
+        set_motor(False)
         control_motor = False
-        ultimo_cambio = time.time()
-        motivo_ultimo_cambio = motivo
+        tiempo_apagado = time.time()   # ⬅️ AQUÍ inicia el rearranque
+        motivo_ultimo_evento = motivo
 
 def tiempo_rearranque_restante():
-    if ultimo_cambio is None:
+    if control_motor or tiempo_apagado is None:
         return 0
-    t = RETARDO_REARRANQUE - (time.time() - ultimo_cambio)
-    return max(0, int(t))
+    restante = RETARDO_REARRANQUE - (time.time() - tiempo_apagado)
+    return max(0, int(restante))
+# ----------------------------
 
-# ================= CONSOLA ===================
-
-def log_estado(bajo, alto, estado_motor):
+# -------- LOG --------------
+def imprimir_estado(bajo, alto, motor_di):
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    print("\n" + "="*55)
+    print("\n" + "-"*55)
     print(f"[{ts}] Sistema Pozo–Tanque")
-    print(f"Flotadores → Bajo: {int(bajo)} | Alto: {int(alto)}")
+    print(f"Flotadores → Bajo:{int(bajo)} | Alto:{int(alto)}")
     print(f"Control motor (DIO0): {'ENCENDIDO' if control_motor else 'APAGADO'}")
-    print(f"Estado motor  (DIO1): {'ENCENDIDO' if estado_motor else 'APAGADO'}")
+    print(f"Estado motor  (DIO1): {'ENCENDIDO' if motor_di else 'APAGADO'}")
 
-    if not control_motor and estado_motor:
+    if not control_motor and motor_di:
         print("⚠ Motor encendido manualmente")
 
-    if tiempo_rearranque_restante() > 0:
-        print(f"⏳ Rearranque en: {tiempo_rearranque_restante()} s")
+    if not control_motor and tiempo_rearranque_restante() > 0:
+        print(f"⏳ Rearranque en {tiempo_rearranque_restante()} s")
 
-    print(f"Motivo último evento: {motivo_ultimo_cambio}")
-    print("="*55)
-
-# ================= MAIN ======================
+    print(f"Motivo último evento: {motivo_ultimo_evento}")
+    print("-"*55)
+# ----------------------------
 
 print("🚀 Sistema Pozo–Tanque iniciado")
 
 while True:
-    flotadores = leer_flotadores()
+    flot = leer_flotadores()
 
-    if flotadores is None:
+    if flot is None:
         if errores_modbus >= MAX_ERRORES_MODBUS:
             apagar_motor("Falla comunicación Modbus")
-        time.sleep(INTERVALO_LECTURA)
+        time.sleep(INTERVALO)
         continue
 
-    bajo, alto = flotadores
-    estado_motor = leer_dio1()
+    bajo, alto = flot
+    motor_di = leer_motor_DI()
 
-    # --- INCONSISTENCIA ---
+    # Inconsistencia
     if alto and not bajo:
         apagar_motor("Inconsistencia flotadores")
 
-    # --- TANQUE LLENO ---
+    # Tanque lleno
     elif bajo and alto:
         apagar_motor("Tanque lleno")
 
-    # --- TANQUE VACÍO ---
+    # Tanque vacío
     elif not bajo and not alto:
         if not control_motor and tiempo_rearranque_restante() == 0:
             encender_motor("Tanque vacío")
 
-    log_estado(bajo, alto, estado_motor)
-    time.sleep(INTERVALO_LECTURA)
+    imprimir_estado(bajo, alto, motor_di)
+    time.sleep(INTERVALO)
