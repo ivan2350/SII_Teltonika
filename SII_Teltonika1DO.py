@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import time
-from pymodbus.client.sync import ModbusSerialClient
+from pymodbus.client import ModbusSerialClient
 
 # ================= CONFIGURACIÓN =================
 
