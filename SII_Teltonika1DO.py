@@ -10,29 +10,29 @@ BAUDRATE = 9600
 ID_TANQUE = 32
 
 INTERVALO_NORMAL = 60          # segundos (modo normal)
-INTERVALO_ERROR = 1            # segundos (error Modbus)
-RETARDO_REARRANQUE = 180
-MAX_FALLOS_MODBUS = 10
+INTERVALO_ERROR = 5            # segundos (fallo Modbus)
+RETARDO_REARRANQUE = 180       # segundos
+MAX_FALLOS_MODBUS = 100        # reintentos antes de forzar reinicio Modbus
 
 # Teltonika GPIO (ubus)
 DO_MOTOR = "ioman.gpio.dio0"   # Control motor/bomba
-DI_MOTOR = "ioman.gpio.dio1"   # Estado motor/bomba
+DI_MOTOR = "ioman.gpio.dio1"   # Estado motor/bomba (informativo)
 
 # ================= ESTADO =================
 
-control_motor = False
-motor_estado = False
+control_motor = False    # Estado deseado del motor (DO)
+motor_estado = False    # Estado real del motor (DI)
 
-tiempo_ultimo_apagado = None
-fallos_modbus = 0
-estado_proceso = "Inicializando"
+tiempo_ultimo_apagado = None    # Timestamp del último apagado del motor
+fallos_modbus = 0        # Contador de fallos Modbus
+estado_proceso = "Inicializando"    # Descripción del estado actual
 
-intervalo_actual = INTERVALO_NORMAL
+intervalo_actual = INTERVALO_NORMAL  # Intervalo de espera actual
 
 # ================= UTIL =================
 
 def ts():
-    return time.strftime("%Y-%m-%d %H:%M:%S")
+    return time.strftime("%d-%m-%Y %H:%M:%S")   
 
 # ================= GPIO =================
 
@@ -105,7 +105,7 @@ while True:
         # ===== MODBUS =====
         flotador_bajo, flotador_alto = leer_flotadores(client)
 
-        # Modbus OK → volvemos a intervalo normal
+        # Modbus OK → intervalo normal
         fallos_modbus = 0
         intervalo_actual = INTERVALO_NORMAL
 
