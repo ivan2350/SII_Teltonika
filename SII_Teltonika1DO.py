@@ -9,13 +9,14 @@ MODBUS_PORT = "/dev/rs485"
 BAUDRATE = 9600
 ID_TANQUE = 32
 
-RETARDO_REARRANQUE = 60        # segundos
-INTERVALO_LECTURA = 2          # segundos
+INTERVALO_NORMAL = 60          # segundos (modo normal)
+INTERVALO_ERROR = 1            # segundos (error Modbus)
+RETARDO_REARRANQUE = 180
 MAX_FALLOS_MODBUS = 10
 
 # Teltonika GPIO (ubus)
 DO_MOTOR = "ioman.gpio.dio0"   # Control motor/bomba
-DI_MOTOR = "ioman.gpio.dio1"   # Estado motor/bomba (informativo)
+DI_MOTOR = "ioman.gpio.dio1"   # Estado motor/bomba
 
 # ================= ESTADO =================
 
@@ -25,6 +26,8 @@ motor_estado = False
 tiempo_ultimo_apagado = None
 fallos_modbus = 0
 estado_proceso = "Inicializando"
+
+intervalo_actual = INTERVALO_NORMAL
 
 # ================= UTIL =================
 
@@ -101,7 +104,10 @@ while True:
     try:
         # ===== MODBUS =====
         flotador_bajo, flotador_alto = leer_flotadores(client)
+
+        # Modbus OK → volvemos a intervalo normal
         fallos_modbus = 0
+        intervalo_actual = INTERVALO_NORMAL
 
         # ===== ESTADO MOTOR (DI) =====
         motor_estado = leer_motor_estado()
@@ -145,11 +151,16 @@ while True:
             f"{estado_proceso}"
         )
 
-        time.sleep(INTERVALO_LECTURA)
+        time.sleep(intervalo_actual)
 
     except Exception as e:
         fallos_modbus += 1
-        print(f"[{ts()}] ❌ ERROR Modbus ({fallos_modbus}/{MAX_FALLOS_MODBUS}): {e}")
+        intervalo_actual = INTERVALO_ERROR
+
+        print(
+            f"[{ts()}] ❌ ERROR Modbus ({fallos_modbus}/{MAX_FALLOS_MODBUS}) | "
+            f"Reintentando cada {INTERVALO_ERROR}s"
+        )
 
         if fallos_modbus >= MAX_FALLOS_MODBUS:
             estado_proceso = "❌ Falla comunicación Modbus"
@@ -159,4 +170,4 @@ while True:
             client = reiniciar_modbus(client)
             fallos_modbus = 0
 
-        time.sleep(1)
+        time.sleep(intervalo_actual)
