@@ -26,13 +26,18 @@ tiempo_ultimo_apagado = None
 fallos_modbus = 0
 estado_proceso = "Inicializando"
 
-# ================= FUNCIONES GPIO =================
+# ================= UTIL =================
 
-def set_motor(valor: bool):
+def ts():
+    return time.strftime("%Y-%m-%d %H:%M:%S")
+
+# ================= GPIO =================
+
+def set_motor(valor: bool, motivo=None):
     global control_motor, tiempo_ultimo_apagado
 
     if control_motor == valor:
-        return  # No repetir comando
+        return
 
     cmd = f"ubus call {DO_MOTOR} update '{{\"value\":\"{1 if valor else 0}\"}}'"
     subprocess.run(cmd, shell=True, check=False)
@@ -41,6 +46,11 @@ def set_motor(valor: bool):
 
     if not valor:
         tiempo_ultimo_apagado = time.time()
+        if motivo:
+            print(f"[{ts()}] 🔴 CONTROL APAGADO → {motivo}")
+    else:
+        if motivo:
+            print(f"[{ts()}] 🟢 CONTROL ENCENDIDO → {motivo}")
 
 def leer_motor_estado():
     try:
@@ -49,7 +59,7 @@ def leer_motor_estado():
         ).decode()
         return '"value": "1"' in out
     except:
-        return motor_estado  # conserva último valor válido
+        return motor_estado
 
 # ================= MODBUS =================
 
@@ -71,13 +81,10 @@ def leer_flotadores(client):
     if lectura.isError():
         raise Exception("Error lectura flotadores")
 
-    flotador_bajo = bool(lectura.bits[0])
-    flotador_alto = bool(lectura.bits[1])
-
-    return flotador_bajo, flotador_alto
+    return bool(lectura.bits[0]), bool(lectura.bits[1])
 
 def reiniciar_modbus(client):
-    print("🔄 Reiniciando conexión Modbus RS485...")
+    print(f"[{ts()}] 🔄 Reiniciando conexión Modbus RS485...")
     try:
         client.close()
     except:
@@ -87,35 +94,30 @@ def reiniciar_modbus(client):
 
 # ================= INICIO =================
 
-print("🚀 Sistema Pozo–Tanque iniciado")
+print(f"[{ts()}] 🚀 Sistema Pozo–Tanque iniciado")
 client = crear_cliente()
 
 while True:
     try:
-        # ===== LECTURA MODBUS =====
+        # ===== MODBUS =====
         flotador_bajo, flotador_alto = leer_flotadores(client)
         fallos_modbus = 0
 
         # ===== ESTADO MOTOR (DI) =====
         motor_estado = leer_motor_estado()
-
         ahora = time.time()
 
-        # ===== LÓGICA DE CONTROL =====
-
-        # Inconsistencia
+        # ===== LÓGICA =====
         if flotador_alto and not flotador_bajo:
             estado_proceso = "⚠️ Inconsistencia flotadores"
             if control_motor:
-                set_motor(False)
+                set_motor(False, "Inconsistencia flotadores")
 
-        # Tanque lleno
         elif flotador_alto and flotador_bajo:
             estado_proceso = "🟦 Tanque lleno"
             if control_motor:
-                set_motor(False)
+                set_motor(False, "Tanque lleno")
 
-        # Tanque vacío
         elif not flotador_bajo and not flotador_alto:
             if control_motor:
                 estado_proceso = "💧 Llenando tanque"
@@ -123,7 +125,7 @@ while True:
                 if tiempo_ultimo_apagado is None or \
                    (ahora - tiempo_ultimo_apagado) >= RETARDO_REARRANQUE:
                     estado_proceso = "▶️ Arranque permitido"
-                    set_motor(True)
+                    set_motor(True, "Tanque vacío")
                 else:
                     restante = int(
                         RETARDO_REARRANQUE - (ahora - tiempo_ultimo_apagado)
@@ -131,10 +133,11 @@ while True:
                     estado_proceso = f"⏳ Esperando rearranque ({restante}s)"
 
         else:
-            estado_proceso = "Estado no definido"
+            estado_proceso = "🟡 Nivel medio"
 
         # ===== CONSOLA =====
         print(
+            f"[{ts()}] "
             f"🟢 Bajo: {flotador_bajo} | "
             f"🔵 Alto: {flotador_alto} | "
             f"🎛️ Control: {'ON' if control_motor else 'OFF'} | "
@@ -146,12 +149,12 @@ while True:
 
     except Exception as e:
         fallos_modbus += 1
-        print(f"❌ ERROR Modbus ({fallos_modbus}/{MAX_FALLOS_MODBUS}): {e}")
+        print(f"[{ts()}] ❌ ERROR Modbus ({fallos_modbus}/{MAX_FALLOS_MODBUS}): {e}")
 
         if fallos_modbus >= MAX_FALLOS_MODBUS:
             estado_proceso = "❌ Falla comunicación Modbus"
             if control_motor:
-                set_motor(False)
+                set_motor(False, "Falla comunicación Modbus")
 
             client = reiniciar_modbus(client)
             fallos_modbus = 0
