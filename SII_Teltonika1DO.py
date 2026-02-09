@@ -1,3 +1,5 @@
+#este programa es para usar solo 1 2+2+2 en el tanque, utilizando la DOI0 como control y la DOI1 como estado del motor/bomba
+
 #!/usr/bin/env python3
 import time
 import subprocess
@@ -12,7 +14,7 @@ ID_TANQUE = 32
 INTERVALO_NORMAL = 60          # segundos (modo normal)
 INTERVALO_ERROR = 5            # segundos (fallo Modbus)
 RETARDO_REARRANQUE = 180       # segundos
-MAX_FALLOS_MODBUS = 100        # reintentos antes de forzar reinicio Modbus
+MAX_FALLOS_MODBUS = 30        # reintentos antes de forzar reinicio Modbus
 
 # Teltonika GPIO (ubus)
 DO_MOTOR = "ioman.gpio.dio0"   # Control motor/bomba
