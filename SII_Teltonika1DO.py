@@ -19,6 +19,7 @@ RETARDO_REARRANQUE = 180
 MAX_FALLOS_MODBUS = 30
 
 TIEMPO_DIAGNOSTICO = 3600   # 1 hora
+POLL_BOTON = 1             # segundos
 
 # GPIO Teltonika
 DO_MOTOR = "ioman.gpio.dio0"   # Control bomba
@@ -40,6 +41,18 @@ intervalo_actual = INTERVALO_NORMAL
 
 def ts():
     return time.strftime("%d-%m-%Y %H:%M:%S")
+
+def tiempo_restante_diag():
+    if not modo_diag_activo or tiempo_diag_inicio is None:
+        return None
+
+    restante = int(TIEMPO_DIAGNOSTICO - (time.time() - tiempo_diag_inicio))
+    if restante < 0:
+        restante = 0
+
+    minutos = restante // 60
+    segundos = restante % 60
+    return f"{minutos}m {segundos}s"
 
 # ================= GPIO =================
 
@@ -70,6 +83,18 @@ def leer_push_diagnostico():
         return '"value": "1"' in out
     except:
         return False
+
+def procesar_boton_diagnostico():
+    global modo_diag_activo, tiempo_diag_inicio
+
+    # Mientras esté activo, ignorar completamente el botón
+    if modo_diag_activo:
+        return
+
+    if leer_push_diagnostico():
+        modo_diag_activo = True
+        tiempo_diag_inicio = time.time()
+        print(f"[{ts()}] 🧪 MODO DIAGNÓSTICO ACTIVADO (1 hora)")
 
 # ================= MODBUS =================
 
@@ -111,29 +136,20 @@ while True:
     try:
         ahora = time.time()
 
-        # ===== PUSH-BUTTON DIAGNÓSTICO =====
-        if leer_push_diagnostico():
-            modo_diag_activo = True
-            tiempo_diag_inicio = ahora
-            print(f"[{ts()}] 🧪 MODO DIAGNÓSTICO ACTIVADO (1 hora)")
-
-        # ===== CONTROL DE TIEMPO DIAGNÓSTICO =====
+        # ===== CONTROL DE TIEMPO DE DIAGNÓSTICO =====
         if modo_diag_activo:
-            if (ahora - tiempo_diag_inicio) < TIEMPO_DIAGNOSTICO:
-                intervalo_actual = INTERVALO_DIAG
-            else:
+            if (ahora - tiempo_diag_inicio) >= TIEMPO_DIAGNOSTICO:
                 modo_diag_activo = False
                 tiempo_diag_inicio = None
-                intervalo_actual = INTERVALO_NORMAL
                 print(f"[{ts()}] 🟢 MODO DIAGNÓSTICO FINALIZADO")
-        else:
-            intervalo_actual = INTERVALO_NORMAL
+
+        intervalo_actual = INTERVALO_DIAG if modo_diag_activo else INTERVALO_NORMAL
 
         # ===== MODBUS =====
         flotador_bajo, flotador_alto = leer_flotadores(client)
         fallos_modbus = 0
 
-        # ===== LÓGICA (IGUAL A LA ORIGINAL) =====
+        # ===== LÓGICA DEL TANQUE (SIN CAMBIOS) =====
         if flotador_alto and not flotador_bajo:
             estado_proceso = "⚠️ Inconsistencia flotadores"
             set_motor(False, "Inconsistencia flotadores")
@@ -155,29 +171,34 @@ while True:
                     estado_proceso = f"⏳ Esperando rearranque ({restante}s)"
             else:
                 estado_proceso = "💧 Llenando tanque"
-
         else:
             estado_proceso = "🟡 Nivel medio"
 
         # ===== CONSOLA =====
+        restante_diag = tiempo_restante_diag()
+
         print(
             f"[{ts()}] "
             f"🟢 Bajo: {flotador_bajo} | "
             f"🔵 Alto: {flotador_alto} | "
             f"🎛️ Bomba: {'ON' if control_motor else 'OFF'} | "
-            f"🧪 Diagnóstico: {'ON' if modo_diag_activo else 'OFF'} | "
+            f"🧪 Diagnóstico: "
+            f"{'ON (' + restante_diag + ' restantes)' if restante_diag else 'OFF'} | "
             f"{estado_proceso}"
         )
 
-        time.sleep(intervalo_actual)
+        # ===== SLEEP FRAGMENTADO (no perder pulsos) =====
+        tiempo_dormido = 0
+        while tiempo_dormido < intervalo_actual:
+            procesar_boton_diagnostico()
+            time.sleep(POLL_BOTON)
+            tiempo_dormido += POLL_BOTON
 
     except Exception:
         fallos_modbus += 1
         intervalo_actual = INTERVALO_ERROR
 
-        print(
-            f"[{ts()}] ❌ ERROR Modbus ({fallos_modbus}/{MAX_FALLOS_MODBUS})"
-        )
+        print(f"[{ts()}] ❌ ERROR Modbus ({fallos_modbus}/{MAX_FALLOS_MODBUS})")
 
         if fallos_modbus >= MAX_FALLOS_MODBUS:
             set_motor(False, "Falla comunicación Modbus")
