@@ -11,14 +11,14 @@ MODBUS_PORT = "/dev/rs485"
 BAUDRATE = 9600
 ID_TANQUE = 32
 
-INTERVALO_NORMAL = 60
-INTERVALO_ERROR = 5
-INTERVALO_DIAG = 5
+INTERVALO_NORMAL = 60       # Cada cuánto se lee el tanque
+INTERVALO_ERROR = 5     # Pausa tras error antes de reintentar
+INTERVALO_DIAG = 5    # Intervalo durante diagnóstico (más frecuente para detectar botón)
 
-RETARDO_REARRANQUE = 180
-MAX_FALLOS_MODBUS = 30
+RETARDO_REARRANQUE = 180        # 3 minutos mínimo apagada tras detener por tanque lleno o inconsistencia
+MAX_FALLOS_MODBUS = 30          # Reintentos antes de reiniciar cliente Modbus
 
-TIEMPO_DIAGNOSTICO = 3600   # 1 hora
+TIEMPO_DIAGNOSTICO = 180   # 1 hora
 POLL_BOTON = 1             # segundos
 
 # GPIO Teltonika
