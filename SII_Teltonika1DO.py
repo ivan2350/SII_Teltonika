@@ -11,19 +11,19 @@ MODBUS_PORT = "/dev/rs485"
 BAUDRATE = 9600
 ID_TANQUE = 32
 
-INTERVALO_NORMAL = 60       # Cada cuánto se lee el tanque
-INTERVALO_ERROR = 5     # Pausa tras error antes de reintentar
-INTERVALO_DIAG = 5    # Intervalo durante diagnóstico (más frecuente para detectar botón)
+INTERVALO_NORMAL = 60
+INTERVALO_ERROR = 5
+INTERVALO_DIAG = 5
 
-RETARDO_REARRANQUE = 180        # 3 minutos mínimo apagada tras detener por tanque lleno o inconsistencia
-MAX_FALLOS_MODBUS = 30          # Reintentos antes de reiniciar cliente Modbus
+RETARDO_REARRANQUE = 180
+MAX_FALLOS_MODBUS = 30
 
-TIEMPO_DIAGNOSTICO = 180   # 1 hora
-POLL_BOTON = 1             # segundos
+TIEMPO_DIAGNOSTICO = 3600   # 1 hora
+POLL_BOTON = 1             # segundos (muestreo DI)
 
 # GPIO Teltonika
 DO_MOTOR = "ioman.gpio.dio0"   # Control bomba
-DI_DIAG = "ioman.gpio.dio1"    # Push-button diagnóstico
+DI_DIAG = "ioman.gpio.dio1"    # Interruptor diagnóstico
 
 # ================= ESTADO =================
 
@@ -34,6 +34,8 @@ estado_proceso = "Inicializando"
 
 modo_diag_activo = False
 tiempo_diag_inicio = None
+
+estado_diag_anterior = False   # para detectar flanco OFF->ON
 
 intervalo_actual = INTERVALO_NORMAL
 
@@ -75,7 +77,7 @@ def set_motor(valor: bool, motivo=None):
         if motivo:
             print(f"[{ts()}] 🟢 BOMBA ENCENDIDA → {motivo}")
 
-def leer_push_diagnostico():
+def leer_interruptor_diag():
     try:
         out = subprocess.check_output(
             f"ubus call {DI_DIAG} status", shell=True
@@ -84,17 +86,28 @@ def leer_push_diagnostico():
     except:
         return False
 
-def procesar_boton_diagnostico():
-    global modo_diag_activo, tiempo_diag_inicio
+def procesar_interruptor_diagnostico():
+    """
+    Detecta SOLO flanco OFF -> ON
+    - Activa diagnóstico una sola vez
+    - Ignora si el interruptor se queda en ON
+    - Rompe el sleep para aplicar diagnóstico inmediato
+    """
+    global modo_diag_activo, tiempo_diag_inicio, estado_diag_anterior
 
-    # Mientras esté activo, ignorar completamente el botón
-    if modo_diag_activo:
-        return
+    estado_actual = leer_interruptor_diag()
 
-    if leer_push_diagnostico():
-        modo_diag_activo = True
-        tiempo_diag_inicio = time.time()
-        print(f"[{ts()}] 🧪 MODO DIAGNÓSTICO ACTIVADO (1 hora)")
+    # Flanco OFF -> ON
+    if (not estado_diag_anterior) and estado_actual:
+        if not modo_diag_activo:
+            modo_diag_activo = True
+            tiempo_diag_inicio = time.time()
+            print(f"[{ts()}] 🧪 MODO DIAGNÓSTICO ACTIVADO (1 hora)")
+            estado_diag_anterior = estado_actual
+            return True  # activar de inmediato
+
+    estado_diag_anterior = estado_actual
+    return False
 
 # ================= MODBUS =================
 
@@ -129,14 +142,14 @@ def reiniciar_modbus(client):
 
 # ================= INICIO =================
 
-print(f"[{ts()}] 🚀 Sistema Pozo–Tanque iniciado (diagnóstico por push-button)")
+print(f"[{ts()}] 🚀 Sistema Pozo–Tanque iniciado (diagnóstico por interruptor)")
 client = crear_cliente()
 
 while True:
     try:
         ahora = time.time()
 
-        # ===== CONTROL DE TIEMPO DE DIAGNÓSTICO =====
+        # ===== CONTROL TIEMPO DIAGNÓSTICO =====
         if modo_diag_activo:
             if (ahora - tiempo_diag_inicio) >= TIEMPO_DIAGNOSTICO:
                 modo_diag_activo = False
@@ -187,10 +200,12 @@ while True:
             f"{estado_proceso}"
         )
 
-        # ===== SLEEP FRAGMENTADO (no perder pulsos) =====
+        # ===== SLEEP FRAGMENTADO (respuesta inmediata) =====
         tiempo_dormido = 0
         while tiempo_dormido < intervalo_actual:
-            procesar_boton_diagnostico()
+            if procesar_interruptor_diagnostico():
+                break  # salir y aplicar diagnóstico YA
+
             time.sleep(POLL_BOTON)
             tiempo_dormido += POLL_BOTON
 
