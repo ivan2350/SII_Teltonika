@@ -1,6 +1,6 @@
 #este programa es para usar solo 1 2+2+2 en el tanque, utilizando la DOI0 como control y la DOI1 como estado del motor/bomba
 
-#!/usr/bin/env python3
+##!/usr/bin/env python3
 import time
 import subprocess
 from pymodbus.client import ModbusSerialClient
@@ -18,7 +18,7 @@ INTERVALO_DIAG = 2
 RETARDO_REARRANQUE = 180
 MAX_FALLOS_MODBUS = 30
 
-TIEMPO_DIAGNOSTICO = 180   # 1 hora
+TIEMPO_DIAGNOSTICO = 60   # 1 hora
 POLL_BOTON = 1             # segundos (muestreo DI)
 
 # GPIO Teltonika
@@ -35,7 +35,7 @@ estado_proceso = "Inicializando"
 modo_diag_activo = False
 tiempo_diag_inicio = None
 
-estado_diag_anterior = False   # para detectar flanco OFF->ON
+estado_diag_anterior = False   # para detectar cambios ON <-> OFF
 
 intervalo_actual = INTERVALO_NORMAL
 
@@ -52,8 +52,8 @@ def tiempo_restante_diag():
     if restante < 0:
         restante = 0
 
-    minutos = restante // 60
-    segundos = restante % 60
+    minutos = restante // 60            
+    segundos = restante % 60                                                            
     return f"{minutos}m {segundos}s"
 
 # ================= GPIO =================
@@ -88,17 +88,15 @@ def leer_interruptor_diag():
 
 def procesar_interruptor_diagnostico():
     """
-    Detecta SOLO flanco OFF -> ON
-    - Activa diagnóstico una sola vez
-    - Ignora si el interruptor se queda en ON
-    - Rompe el sleep para aplicar diagnóstico inmediato
+    Inicia diagnóstico por CUALQUIER cambio de estado del interruptor,
+    SOLO si no hay diagnóstico activo.
     """
     global modo_diag_activo, tiempo_diag_inicio, estado_diag_anterior
 
     estado_actual = leer_interruptor_diag()
 
-    # Flanco OFF -> ON
-    if (not estado_diag_anterior) and estado_actual:
+    # Detectar cualquier cambio ON <-> OFF
+    if estado_actual != estado_diag_anterior:
         if not modo_diag_activo:
             modo_diag_activo = True
             tiempo_diag_inicio = time.time()
@@ -142,7 +140,7 @@ def reiniciar_modbus(client):
 
 # ================= INICIO =================
 
-print(f"[{ts()}] 🚀 Sistema Pozo–Tanque iniciado (diagnóstico por interruptor)")
+print(f"[{ts()}] 🚀 Sistema Pozo–Tanque iniciado (diagnóstico por cambio de estado)")
 client = crear_cliente()
 
 while True:
@@ -200,11 +198,11 @@ while True:
             f"{estado_proceso}"
         )
 
-        # ===== SLEEP FRAGMENTADO (respuesta inmediata) =====
+        # ===== SLEEP FRAGMENTADO (respuesta inmediata a cambios) =====
         tiempo_dormido = 0
         while tiempo_dormido < intervalo_actual:
             if procesar_interruptor_diagnostico():
-                break  # salir y aplicar diagnóstico YA
+                break  # salir ya y aplicar modo diagnóstico
 
             time.sleep(POLL_BOTON)
             tiempo_dormido += POLL_BOTON
