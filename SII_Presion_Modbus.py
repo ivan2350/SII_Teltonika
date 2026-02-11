@@ -8,7 +8,14 @@ from pymodbus.client import ModbusSerialClient
 
 MODBUS_PORT = "/dev/rs485"
 BAUDRATE = 9600
-ID_SENSOR = 1  # Cambiar si es distinto
+ID_SENSOR = 1
+
+# Tanque
+ALTURA_TANQUE = 30.0  # metros
+NIVEL_ENCENDIDO = 6.0
+NIVEL_APAGADO = 28.0
+
+FACTOR_PSI_A_METROS = 0.70307
 
 INTERVALO_NORMAL = 60
 INTERVALO_ERROR = 5
@@ -20,12 +27,7 @@ MAX_FALLOS_MODBUS = 30
 TIEMPO_DIAGNOSTICO = 3600
 POLL_BOTON = 1
 
-ALTURA_TANQUE = 30.0
-NIVEL_ENCENDIDO = 3.0
-NIVEL_APAGADO = 30.0
-
-FACTOR_PSI_A_METROS = 0.703
-
+# GPIO Teltonika
 DO_MOTOR = "ioman.gpio.dio0"
 DI_DIAG = "ioman.gpio.dio1"
 
@@ -34,9 +36,12 @@ DI_DIAG = "ioman.gpio.dio1"
 control_motor = False
 tiempo_ultimo_apagado = None
 fallos_modbus = 0
+estado_proceso = "Inicializando"
+
 modo_diag_activo = False
 tiempo_diag_inicio = None
 estado_diag_anterior = False
+
 intervalo_actual = INTERVALO_NORMAL
 
 # ================= UTIL =================
@@ -44,24 +49,57 @@ intervalo_actual = INTERVALO_NORMAL
 def ts():
     return time.strftime("%d-%m-%Y %H:%M:%S")
 
+def psi_a_metros(psi):
+    return psi * FACTOR_PSI_A_METROS
+
+def porcentaje_tanque(nivel_m):
+    return (nivel_m / ALTURA_TANQUE) * 100
+
 # ================= GPIO =================
 
-def set_motor(valor, motivo=None):
+def set_motor(valor: bool, motivo=None):
     global control_motor, tiempo_ultimo_apagado
 
     if control_motor == valor:
         return
 
     cmd = f"ubus call {DO_MOTOR} update '{{\"value\":\"{1 if valor else 0}\"}}'"
-    subprocess.run(cmd, shell=True)
+    subprocess.run(cmd, shell=True, check=False)
 
     control_motor = valor
 
     if not valor:
         tiempo_ultimo_apagado = time.time()
-        print(f"[{ts()}] 🔴 BOMBA APAGADA → {motivo}")
+        if motivo:
+            print(f"[{ts()}] 🔴 BOMBA APAGADA → {motivo}")
     else:
-        print(f"[{ts()}] 🟢 BOMBA ENCENDIDA → {motivo}")
+        if motivo:
+            print(f"[{ts()}] 🟢 BOMBA ENCENDIDA → {motivo}")
+
+def leer_interruptor_diag():
+    try:
+        out = subprocess.check_output(
+            f"ubus call {DI_DIAG} status", shell=True
+        ).decode()
+        return '"value": "1"' in out
+    except:
+        return False
+
+def procesar_interruptor_diagnostico():
+    global modo_diag_activo, tiempo_diag_inicio, estado_diag_anterior
+
+    estado_actual = leer_interruptor_diag()
+
+    if estado_actual != estado_diag_anterior:
+        if not modo_diag_activo:
+            modo_diag_activo = True
+            tiempo_diag_inicio = time.time()
+            print(f"[{ts()}] 🧪 MODO DIAGNÓSTICO ACTIVADO (1 hora)")
+            estado_diag_anterior = estado_actual
+            return True
+
+    estado_diag_anterior = estado_actual
+    return False
 
 # ================= MODBUS =================
 
@@ -75,7 +113,7 @@ def crear_cliente():
 
 def leer_presion(client):
     lectura = client.read_holding_registers(
-        address=0,
+        address=0,  # registro base 0
         count=2,
         unit=ID_SENSOR
     )
@@ -83,58 +121,97 @@ def leer_presion(client):
     if lectura.isError():
         raise Exception("Error lectura presión")
 
-    raw = struct.pack('>HH', lectura.registers[0], lectura.registers[1])
+    # Orden compatible con 3,4,1,2
+    raw = struct.pack('>HH', lectura.registers[1], lectura.registers[0])
     presion = struct.unpack('>f', raw)[0]
 
     return presion
 
+def reiniciar_modbus(client):
+    print(f"[{ts()}] 🔄 Reiniciando Modbus RS485...")
+    try:
+        client.close()
+    except:
+        pass
+    time.sleep(2)
+    return crear_cliente()
+
 # ================= INICIO =================
 
-print(f"[{ts()}] 🚀 Sistema control por presión iniciado")
+print(f"[{ts()}] 🚀 Sistema Tanque por Presión iniciado")
 client = crear_cliente()
 
 while True:
     try:
         ahora = time.time()
+        procesar_interruptor_diagnostico()
 
+        if modo_diag_activo:
+            if (ahora - tiempo_diag_inicio) >= TIEMPO_DIAGNOSTICO:
+                modo_diag_activo = False
+                tiempo_diag_inicio = None
+                print(f"[{ts()}] 🟢 MODO DIAGNÓSTICO FINALIZADO")
+
+        intervalo_actual = INTERVALO_DIAG if modo_diag_activo else INTERVALO_NORMAL
+
+        # ===== LECTURA PRESIÓN =====
         presion_psi = leer_presion(client)
+        fallos_modbus = 0
 
-        # Validación básica
+        # Validaciones básicas
         if presion_psi < -1 or presion_psi > 60:
-            raise Exception("Presión fuera de rango")
+            raise Exception("Presión fuera de rango lógico")
 
-        nivel_m = presion_psi * FACTOR_PSI_A_METROS
-        porcentaje = (nivel_m / ALTURA_TANQUE) * 100
+        nivel_m = psi_a_metros(presion_psi)
+        porcentaje = porcentaje_tanque(nivel_m)
 
-        # ===== LÓGICA =====
+        # ===== LÓGICA CONTROL =====
+        if nivel_m >= NIVEL_APAGADO:
+            estado_proceso = "🟦 Tanque lleno"
+            set_motor(False, "Nivel máximo alcanzado")
 
-        if nivel_m <= NIVEL_ENCENDIDO:
+        elif nivel_m <= NIVEL_ENCENDIDO:
             if not control_motor:
                 if tiempo_ultimo_apagado is None or \
                    (ahora - tiempo_ultimo_apagado) >= RETARDO_REARRANQUE:
+                    estado_proceso = "▶️ Arranque por nivel bajo"
                     set_motor(True, "Nivel bajo")
-        elif nivel_m >= NIVEL_APAGADO:
-            set_motor(False, "Tanque lleno")
+                else:
+                    restante = int(
+                        RETARDO_REARRANQUE - (ahora - tiempo_ultimo_apagado)
+                    )
+                    estado_proceso = f"⏳ Esperando rearranque ({restante}s)"
+            else:
+                estado_proceso = "💧 Llenando tanque"
+        else:
+            estado_proceso = "🟡 Nivel medio"
 
         print(
             f"[{ts()}] "
-            f"Presión: {presion_psi:.2f} PSI | "
-            f"Nivel: {nivel_m:.2f} m | "
-            f"{porcentaje:.1f}% | "
-            f"Bomba: {'ON' if control_motor else 'OFF'}"
+            f"📟 {presion_psi:.2f} PSI | "
+            f"📏 {nivel_m:.2f} m | "
+            f"📊 {porcentaje:.1f}% | "
+            f"🎛️ {'ON' if control_motor else 'OFF'} | "
+            f"{estado_proceso}"
         )
 
-        time.sleep(INTERVALO_NORMAL)
+        # Sleep fragmentado
+        tiempo_dormido = 0
+        while tiempo_dormido < intervalo_actual:
+            if procesar_interruptor_diagnostico():
+                break
+            time.sleep(POLL_BOTON)
+            tiempo_dormido += POLL_BOTON
 
     except Exception as e:
         fallos_modbus += 1
-        print(f"[{ts()}] ❌ ERROR ({fallos_modbus}/{MAX_FALLOS_MODBUS}) - {e}")
+        intervalo_actual = INTERVALO_ERROR
+
+        print(f"[{ts()}] ❌ ERROR ({fallos_modbus}/{MAX_FALLOS_MODBUS}) → {e}")
 
         if fallos_modbus >= MAX_FALLOS_MODBUS:
-            set_motor(False, "Falla comunicación")
-            client.close()
-            time.sleep(2)
-            client = crear_cliente()
+            set_motor(False, "Falla comunicación o sensor")
+            client = reiniciar_modbus(client)
             fallos_modbus = 0
 
-        time.sleep(INTERVALO_ERROR)
+        time.sleep(intervalo_actual)
