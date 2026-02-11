@@ -6,7 +6,7 @@ from pymodbus.client import ModbusSerialClient
 
 # ================= CONFIGURACIÓN =================
 
-MODBUS_PORT = "/dev/rs485"
+MODBUS_PORT = "/dev/ttyMSM0"
 BAUDRATE = 9600
 ID_SENSOR = 1
 
