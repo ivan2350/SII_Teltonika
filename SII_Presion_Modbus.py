@@ -6,7 +6,7 @@ from pymodbus.client import ModbusSerialClient
 
 # ================= CONFIGURACIÓN =================
 
-MODBUS_PORT = "/dev/ttyMSM0"
+MODBUS_PORT = "/dev/rs485"
 BAUDRATE = 9600
 ID_SENSOR = 1
 
@@ -18,25 +18,17 @@ FACTOR_PSI_A_METROS = 0.70307
 
 INTERVALO_NORMAL = 60
 INTERVALO_ERROR = 5
-INTERVALO_DIAG = 5
 
 RETARDO_REARRANQUE = 180
-MAX_FALLOS_MODBUS = 30
-
-TIEMPO_DIAGNOSTICO = 3600
-POLL_BOTON = 1
+MAX_FALLOS_MODBUS = 10
 
 DO_MOTOR = "ioman.gpio.dio0"
-DI_DIAG = "ioman.gpio.dio1"
 
 # ================= ESTADO =================
 
 control_motor = False
 tiempo_ultimo_apagado = None
 fallos_modbus = 0
-modo_diag_activo = False
-tiempo_diag_inicio = None
-estado_diag_anterior = False
 
 # ================= UTIL =================
 
@@ -64,36 +56,9 @@ def set_motor(valor, motivo=None):
 
     if not valor:
         tiempo_ultimo_apagado = time.time()
-        if motivo:
-            print(f"[{ts()}] 🔴 BOMBA APAGADA → {motivo}")
+        print(f"[{ts()}] 🔴 BOMBA APAGADA → {motivo}")
     else:
-        if motivo:
-            print(f"[{ts()}] 🟢 BOMBA ENCENDIDA → {motivo}")
-
-def leer_interruptor_diag():
-    try:
-        out = subprocess.check_output(
-            f"ubus call {DI_DIAG} status", shell=True
-        ).decode()
-        return '"value": "1"' in out
-    except:
-        return False
-
-def procesar_interruptor_diagnostico():
-    global modo_diag_activo, tiempo_diag_inicio, estado_diag_anterior
-
-    estado_actual = leer_interruptor_diag()
-
-    if estado_actual != estado_diag_anterior:
-        if not modo_diag_activo:
-            modo_diag_activo = True
-            tiempo_diag_inicio = time.time()
-            print(f"[{ts()}] 🧪 MODO DIAGNÓSTICO ACTIVADO (1 hora)")
-            estado_diag_anterior = estado_actual
-            return True
-
-    estado_diag_anterior = estado_actual
-    return False
+        print(f"[{ts()}] 🟢 BOMBA ENCENDIDA → {motivo}")
 
 # ================= MODBUS =================
 
@@ -109,16 +74,18 @@ def crear_cliente():
     )
 
 def leer_presion(client):
+    # 🔥 Leemos exactamente 10 registros como indica el manual
     lectura = client.read_holding_registers(
-        address=1,   # 🔥 CAMBIO IMPORTANTE
-        count=2,
+        address=0,
+        count=10,
         unit=ID_SENSOR
     )
 
     if lectura.isError():
         raise Exception("Error lectura presión")
 
-    # Orden compatible con Byte order 3,4,1,2
+    # Primer float = registros 0 y 1
+    # Orden compatible con 3,4,1,2
     raw = struct.pack('>HH', lectura.registers[1], lectura.registers[0])
     presion = struct.unpack('>f', raw)[0]
 
@@ -130,7 +97,6 @@ def reiniciar_modbus(client):
         client.close()
     except:
         pass
-
     time.sleep(2)
 
     nuevo = crear_cliente()
@@ -150,17 +116,7 @@ if not client.connect():
 while True:
     try:
         ahora = time.time()
-        procesar_interruptor_diagnostico()
 
-        if modo_diag_activo:
-            if (ahora - tiempo_diag_inicio) >= TIEMPO_DIAGNOSTICO:
-                modo_diag_activo = False
-                tiempo_diag_inicio = None
-                print(f"[{ts()}] 🟢 MODO DIAGNÓSTICO FINALIZADO")
-
-        intervalo_actual = INTERVALO_DIAG if modo_diag_activo else INTERVALO_NORMAL
-
-        # ===== LECTURA PRESIÓN =====
         presion_psi = leer_presion(client)
         fallos_modbus = 0
 
@@ -171,6 +127,7 @@ while True:
         porcentaje = porcentaje_tanque(nivel_m)
 
         # ===== CONTROL =====
+
         if nivel_m >= NIVEL_APAGADO:
             set_motor(False, "Nivel máximo alcanzado")
 
@@ -188,12 +145,7 @@ while True:
             f"🎛️ {'ON' if control_motor else 'OFF'}"
         )
 
-        tiempo_dormido = 0
-        while tiempo_dormido < intervalo_actual:
-            if procesar_interruptor_diagnostico():
-                break
-            time.sleep(POLL_BOTON)
-            tiempo_dormido += POLL_BOTON
+        time.sleep(INTERVALO_NORMAL)
 
     except Exception as e:
         fallos_modbus += 1
