@@ -16,7 +16,7 @@ print("✅ Conectado a Modbus TCP local")
 
 while True:
     try:
-        result = client.read_holding_registers(address=1, count=2, unit=1)
+        result = client.read_holding_registers(address=1, count=2, unit=0)
 
         if result.isError():
             print("Error lectura")
