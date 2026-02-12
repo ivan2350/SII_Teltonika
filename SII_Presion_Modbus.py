@@ -13,6 +13,9 @@ PRESION_ARRANQUE = 10.0     # PSI
 PRESION_PARO = 42.0         # PSI
 RETARDO_REARRANQUE = 180    # segundos
 
+ALTURA_TANQUE = 30.0        # metros
+PSI_A_METROS = 0.703        # conversión
+
 INTERVALO = 5               # segundos lectura
 
 # ================= ESTADO =================
@@ -68,9 +71,21 @@ while True:
             value = raw.strip("[]")
             presion = float(value)
 
-            print(f"[{ts()}] Presión actual: {presion:.2f} PSI")
+            # 🔥 Conversión a altura
+            altura = presion * PSI_A_METROS
+            porcentaje = (altura / ALTURA_TANQUE) * 100
 
-            # 🔥 LIMPIEZA AUTOMÁTICA
+            if porcentaje > 100:
+                porcentaje = 100
+
+            print(
+                f"[{ts()}] "
+                f"Presión: {presion:.2f} PSI | "
+                f"Altura: {altura:.2f} m | "
+                f"Llenado: {porcentaje:.1f}%"
+            )
+
+            # 🔥 Limpieza automática
             cursor.execute("DELETE FROM modbus_data WHERE id < ?;", (record_id,))
             conn.commit()
 
