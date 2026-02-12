@@ -4,22 +4,37 @@ import time
 
 DB_PATH = "/var/run/modbus_client/modbus.db"
 
+def ts():
+    return time.strftime("%d-%m-%Y %H:%M:%S")
+
 while True:
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
 
-    cursor.execute("""
-        SELECT id, request_name, response_data
-        FROM modbus_data
-        ORDER BY id DESC
-        LIMIT 5;
-    """)
+        cursor.execute("""
+            SELECT response_data
+            FROM modbus_data
+            WHERE request_name='p1'
+            ORDER BY id DESC
+            LIMIT 1;
+        """)
 
-    rows = cursor.fetchall()
-    conn.close()
+        row = cursor.fetchone()
+        conn.close()
 
-    print("Últimos registros:")
-    for r in rows:
-        print(r)
+        if row and row[0]:
+            raw = row[0].decode()        # convertir bytes a string
+            value = raw.strip("[]")      # quitar corchetes
+            presion = float(value)       # convertir a float
 
-    time.sleep(5)
+            print(f"[{ts()}] Presión: {presion:.2f} PSI")
+
+        else:
+            print("Sin datos")
+
+        time.sleep(5)
+
+    except Exception as e:
+        print("Error:", e)
+        time.sleep(3)
