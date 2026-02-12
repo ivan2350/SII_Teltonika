@@ -6,11 +6,11 @@ DB_PATH = "/var/run/modbus_client/modbus.db"
 conn = sqlite3.connect(DB_PATH)
 cursor = conn.cursor()
 
-cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-tables = cursor.fetchall()
+cursor.execute("PRAGMA table_info(modbus_data);")
+columns = cursor.fetchall()
 
-print("Tablas encontradas:")
-for t in tables:
-    print(t[0])
+print("Columnas en modbus_data:")
+for col in columns:
+    print(col)
 
 conn.close()
