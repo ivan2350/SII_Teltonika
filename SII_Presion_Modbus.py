@@ -1,27 +1,35 @@
-from pymodbus.client import ModbusTcpClient
+#!/usr/bin/env python3
+from pymodbus.client import ModbusSerialClient
 import struct
-import time
 
-client = ModbusTcpClient("127.0.0.1", port=502)
+client = ModbusSerialClient(
+    method='rtu',
+    port='/dev/rs485',
+    baudrate=9600,
+    bytesize=8,
+    parity='N',
+    stopbits=1,
+    timeout=2
+)
 
-if not client.connect():
-    print("No se pudo conectar")
-    exit()
+client.connect()
 
-print("Conectado")
+print("Conectado RS485")
 
-while True:
-    result = client.read_holding_registers(
-        address=0,
-        count=2,
-        unit=255   # 🔥 ESTA ES LA CLAVE
-    )
+# 🔥 PRUEBA 1: holding registers desde 0
+result = client.read_holding_registers(address=0, count=2, unit=1)
+print("Holding 0:", result)
 
-    print(result)
+# 🔥 PRUEBA 2: holding desde 1
+result = client.read_holding_registers(address=1, count=2, unit=1)
+print("Holding 1:", result)
 
-    if not result.isError():
-        raw = struct.pack('>HH', result.registers[1], result.registers[0])
-        presion = struct.unpack('>f', raw)[0]
-        print("Presión:", presion)
+# 🔥 PRUEBA 3: input registers desde 0
+result = client.read_input_registers(address=0, count=2, unit=1)
+print("Input 0:", result)
 
-    time.sleep(5)
+# 🔥 PRUEBA 4: leer 10 registros como el manual
+result = client.read_holding_registers(address=0, count=10, unit=1)
+print("Holding 10:", result)
+
+client.close()
