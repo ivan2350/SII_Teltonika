@@ -1,35 +1,27 @@
 #!/usr/bin/env python3
-from pymodbus.client import ModbusSerialClient
-import struct
+import sqlite3
+import time
 
-client = ModbusSerialClient(
-    method='rtu',
-    port='/dev/rs485',
-    baudrate=9600,
-    bytesize=8,
-    parity='N',
-    stopbits=1,
-    timeout=2
-)
+DB_PATH = "/var/run/modbus_client/modbus.db"
 
-client.connect()
+def ts():
+    return time.strftime("%d-%m-%Y %H:%M:%S")
 
-print("Conectado RS485")
+while True:
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
 
-# 🔥 PRUEBA 1: holding registers desde 0
-result = client.read_holding_registers(address=0, count=2, unit=1)
-print("Holding 0:", result)
+        # 🔥 Obtener último valor guardado
+        cursor.execute("SELECT tag_name, value FROM tags;")
+        rows = cursor.fetchall()
 
-# 🔥 PRUEBA 2: holding desde 1
-result = client.read_holding_registers(address=1, count=2, unit=1)
-print("Holding 1:", result)
+        for row in rows:
+            print(f"[{ts()}] {row[0]}: {row[1]}")
 
-# 🔥 PRUEBA 3: input registers desde 0
-result = client.read_input_registers(address=0, count=2, unit=1)
-print("Input 0:", result)
+        conn.close()
+        time.sleep(5)
 
-# 🔥 PRUEBA 4: leer 10 registros como el manual
-result = client.read_holding_registers(address=0, count=10, unit=1)
-print("Holding 10:", result)
-
-client.close()
+    except Exception as e:
+        print("Error:", e)
+        time.sleep(3)
