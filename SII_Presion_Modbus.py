@@ -32,6 +32,7 @@ tiempo_ultimo_apagado = None
 ultimo_id = None
 ultimo_update = time.time()
 contador_fallas = 0
+sensor_fallando = False
 
 # ================= UTIL =================
 
@@ -55,9 +56,9 @@ def set_bomba(valor, motivo=""):
     else:
         print(f"[{ts()}] 🟢 BOMBA ENCENDIDA → {motivo}")
 
-# ================= LOOP =================
+# ================= LOOP PRINCIPAL =================
 
-print(f"[{ts()}] 🚀 Sistema Tanque PRUEBA iniciado")
+print(f"[{ts()}] 🚀 Sistema Tanque PROTEGIDO iniciado")
 
 while True:
     try:
@@ -87,12 +88,16 @@ while True:
             value = raw.strip("[]")
             presion = float(value)
 
-            # 🔥 Validar rango físico
+            # ===== VALIDACIÓN DE RANGO =====
             if presion > PRESION_MAXIMA or presion < PRESION_MINIMA:
+                sensor_fallando = True
                 set_bomba(False, "Valor fuera de rango")
+                print(f"[{ts()}] ⚠️ Sensor fuera de rango")
+                conn.close()
+                time.sleep(INTERVALO)
                 continue
 
-            # Conversión
+            # ===== CONVERSIÓN =====
             altura = presion * PSI_A_METROS
             porcentaje = (altura / ALTURA_TANQUE) * 100
             if porcentaje > 100:
@@ -106,40 +111,51 @@ while True:
                 f"Bomba: {'ON' if bomba_encendida else 'OFF'}"
             )
 
-            # Limpieza automática
+            # ===== LIMPIEZA SQLITE =====
             cursor.execute("DELETE FROM modbus_data WHERE id < ?;", (record_id,))
             conn.commit()
 
             ahora = time.time()
 
-            # ===== LÓGICA NORMAL =====
+            # ===== LÓGICA DE CONTROL =====
 
-            if presion >= PRESION_PARO:
-                set_bomba(False, "Tanque lleno")
+            if not sensor_fallando:
 
-            elif presion <= PRESION_ARRANQUE:
-                if not bomba_encendida:
-                    if tiempo_ultimo_apagado is None or \
-                       (ahora - tiempo_ultimo_apagado) >= RETARDO_REARRANQUE:
-                        set_bomba(True, "Tanque bajo")
-                    else:
-                        restante = int(
-                            RETARDO_REARRANQUE - (ahora - tiempo_ultimo_apagado)
-                        )
-                        print(f"[{ts()}] ⏳ Esperando rearranque ({restante}s)")
+                if presion >= PRESION_PARO:
+                    set_bomba(False, "Tanque lleno")
+
+                elif presion <= PRESION_ARRANQUE:
+
+                    if not bomba_encendida:
+                        if tiempo_ultimo_apagado is None or \
+                           (ahora - tiempo_ultimo_apagado) >= RETARDO_REARRANQUE:
+                            set_bomba(True, "Tanque bajo")
+                        else:
+                            restante = int(
+                                RETARDO_REARRANQUE - (ahora - tiempo_ultimo_apagado)
+                            )
+                            print(f"[{ts()}] ⏳ Esperando rearranque ({restante}s)")
+
+            else:
+                print(f"[{ts()}] 🔒 Arranque bloqueado por falla de sensor")
 
         conn.close()
 
-        # ===== PROTECCIÓN SENSOR =====
+        # ===== PROTECCIÓN SENSOR (TIMEOUT) =====
 
         if (time.time() - ultimo_update) > TIMEOUT_SENSOR:
+
             contador_fallas += 1
+            sensor_fallando = True
+
             print(f"[{ts()}] ⚠️ Falla sensor ({contador_fallas})")
 
             if contador_fallas >= MAX_FALLAS:
                 set_bomba(False, "Falla comunicación Modbus")
+
         else:
             contador_fallas = 0
+            sensor_fallando = False
 
         time.sleep(INTERVALO)
 
