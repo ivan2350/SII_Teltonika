@@ -16,13 +16,13 @@ RETARDO_REARRANQUE = 180    # segundos
 ALTURA_TANQUE = 30.0        # metros
 PSI_A_METROS = 0.703
 
-INTERVALO = 5               # segundos lectura
+INTERVALO = 60               # segundos lectura
 
 TIMEOUT_SENSOR = 20         # segundos sin actualización
 PRESION_MAXIMA = 60.0
 PRESION_MINIMA = -1.0
 
-MAX_FALLAS = 3
+MAX_FALLAS = 5
 
 # ================= ESTADO =================
 
