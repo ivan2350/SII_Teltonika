@@ -16,9 +16,9 @@ INTERVALO_ERROR = 1
 INTERVALO_DIAG = 1
 
 RETARDO_REARRANQUE = 300
-MAX_FALLOS_MODBUS = 30
+MAX_FALLOS_MODBUS = 30                
 
-TIEMPO_DIAGNOSTICO = 600   # 1 hora
+TIEMPO_DIAGNOSTICO = 3600   # 1 hora
 POLL_BOTON = 1             # segundos (muestreo DI)
 
 # GPIO Teltonika
