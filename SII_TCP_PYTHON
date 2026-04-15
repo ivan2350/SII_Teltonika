@@ -3,7 +3,7 @@ import time
 import subprocess
 from pymodbus.client import ModbusTcpClient
 
-# ================= CONFIGURACIÓN =================
+# ================= CONFIG =================
 
 MODBUS_HOST = "127.0.0.1"
 MODBUS_PORT = 502
@@ -14,17 +14,23 @@ INTERVALO_ERROR = 5
 RETARDO_REARRANQUE = 180
 MAX_FALLOS_MODBUS = 30
 
-# GPIO
-DO_MOTOR = "ioman.gpio.dio0"   # Control bomba
-DI_DIAG = "ioman.gpio.dio1"    # Interruptor diagnóstico
+TIEMPO_DIAGNOSTICO = 3600  # 1 hora
+
+DO_MOTOR = "ioman.gpio.dio0"
+DI_DIAG = "ioman.gpio.dio1"
 
 # ================= ESTADO =================
 
 control_motor = False
 tiempo_ultimo_apagado = None
+
 fallos_modbus = 0
 intervalo_actual = INTERVALO_NORMAL
+
 modo_diagnostico = False
+tiempo_inicio_diag = None
+
+estado_diag_anterior = None  # para detectar flanco
 
 client = ModbusTcpClient(MODBUS_HOST, port=MODBUS_PORT, timeout=2)
 
@@ -35,7 +41,7 @@ def ts():
 
 # ================= GPIO =================
 
-def set_motor(valor: bool, motivo=None):
+def set_motor(valor: bool, motivo=""):
     global control_motor, tiempo_ultimo_apagado
 
     if control_motor == valor:
@@ -52,7 +58,7 @@ def set_motor(valor: bool, motivo=None):
     else:
         print(f"[{ts()}] 🟢 CONTROL ENCENDIDO → {motivo}")
 
-def leer_diagnostico():
+def leer_di():
     try:
         out = subprocess.check_output(
             f"ubus call {DI_DIAG} status", shell=True
@@ -84,27 +90,41 @@ def reiniciar_modbus():
 
 # ================= INICIO =================
 
-print(f"[{ts()}] 🚀 Sistema iniciado (Modo mixto diagnóstico)")
+print(f"[{ts()}] 🚀 Sistema iniciado")
 
 while True:
     try:
-        diag_manual = leer_diagnostico()
+        ahora = time.time()
 
+        # ===== DETECCIÓN DE FLANCO =====
+        estado_diag_actual = leer_di()
+
+        if estado_diag_anterior is None:
+            estado_diag_anterior = estado_diag_actual
+
+        if estado_diag_actual != estado_diag_anterior:
+            # FLANCO DETECTADO
+            modo_diagnostico = True
+            tiempo_inicio_diag = ahora
+
+            print(f"[{ts()}] 🧪 MODO DIAGNÓSTICO ACTIVADO (por cambio de entrada)")
+
+        estado_diag_anterior = estado_diag_actual
+
+        # ===== CONTROL DE TIEMPO DIAGNÓSTICO =====
+        if modo_diagnostico and tiempo_inicio_diag:
+            if ahora - tiempo_inicio_diag >= TIEMPO_DIAGNOSTICO:
+                modo_diagnostico = False
+                print(f"[{ts()}] 🟢 MODO DIAGNÓSTICO FINALIZADO (1 hora)")
+
+        # ===== LECTURA MODBUS =====
         flotador_bajo, flotador_alto = leer_flotadores()
-
-        # ===== RECUPERACIÓN =====
-        if modo_diagnostico and not diag_manual:
-            print(f"[{ts()}] 🟢 Comunicación recuperada")
 
         fallos_modbus = 0
 
-        # ===== MODO DIAGNÓSTICO =====
-        modo_diagnostico = diag_manual
         intervalo_actual = INTERVALO_ERROR if modo_diagnostico else INTERVALO_NORMAL
 
         # ===== LÓGICA =====
-        ahora = time.time()
-
         if flotador_alto and not flotador_bajo:
             estado = "⚠️ Inconsistencia"
             if control_motor:
