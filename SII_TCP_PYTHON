@@ -14,17 +14,15 @@ INTERVALO_ERROR = 5
 RETARDO_REARRANQUE = 180
 MAX_FALLOS_MODBUS = 30
 
-DO_MOTOR = "ioman.gpio.dio0"
-DI_MOTOR = "ioman.gpio.dio1"
+# GPIO
+DO_MOTOR = "ioman.gpio.dio0"   # Control bomba
+DI_DIAG = "ioman.gpio.dio1"    # Interruptor diagnóstico
 
 # ================= ESTADO =================
 
 control_motor = False
-motor_estado = False
-
 tiempo_ultimo_apagado = None
 fallos_modbus = 0
-estado_proceso = "Inicializando"
 intervalo_actual = INTERVALO_NORMAL
 modo_diagnostico = False
 
@@ -50,22 +48,20 @@ def set_motor(valor: bool, motivo=None):
 
     if not valor:
         tiempo_ultimo_apagado = time.time()
-        if motivo:
-            print(f"[{ts()}] 🔴 CONTROL APAGADO → {motivo}")
+        print(f"[{ts()}] 🔴 CONTROL APAGADO → {motivo}")
     else:
-        if motivo:
-            print(f"[{ts()}] 🟢 CONTROL ENCENDIDO → {motivo}")
+        print(f"[{ts()}] 🟢 CONTROL ENCENDIDO → {motivo}")
 
-def leer_motor_estado():
+def leer_diagnostico():
     try:
         out = subprocess.check_output(
-            f"ubus call {DI_MOTOR} status", shell=True
+            f"ubus call {DI_DIAG} status", shell=True
         ).decode()
         return '"value": "1"' in out
     except:
-        return motor_estado
+        return False
 
-# ================= MODBUS TCP =================
+# ================= MODBUS =================
 
 def leer_flotadores():
     if not client.connect():
@@ -79,7 +75,7 @@ def leer_flotadores():
     return rr.bits[0], rr.bits[1]
 
 def reiniciar_modbus():
-    print(f"[{ts()}] 🔄 Reiniciando conexión Modbus TCP...")
+    print(f"[{ts()}] 🔄 Reiniciando Modbus TCP...")
     try:
         client.close()
     except:
@@ -88,80 +84,72 @@ def reiniciar_modbus():
 
 # ================= INICIO =================
 
-print(f"[{ts()}] 🚀 Sistema Pozo–Tanque iniciado (Modbus TCP)")
+print(f"[{ts()}] 🚀 Sistema iniciado (Modo mixto diagnóstico)")
 
 while True:
     try:
-        # ===== LECTURA =====
+        diag_manual = leer_diagnostico()
+
         flotador_bajo, flotador_alto = leer_flotadores()
 
         # ===== RECUPERACIÓN =====
-        if modo_diagnostico:
-            print(f"[{ts()}] 🟢 Comunicación Modbus recuperada")
+        if modo_diagnostico and not diag_manual:
+            print(f"[{ts()}] 🟢 Comunicación recuperada")
 
         fallos_modbus = 0
-        intervalo_actual = INTERVALO_NORMAL
-        modo_diagnostico = False
 
-        # ===== ESTADO MOTOR =====
-        motor_estado = leer_motor_estado()
-        ahora = time.time()
+        # ===== MODO DIAGNÓSTICO =====
+        modo_diagnostico = diag_manual
+        intervalo_actual = INTERVALO_ERROR if modo_diagnostico else INTERVALO_NORMAL
 
         # ===== LÓGICA =====
+        ahora = time.time()
+
         if flotador_alto and not flotador_bajo:
-            estado_proceso = "⚠️ Inconsistencia flotadores"
+            estado = "⚠️ Inconsistencia"
             if control_motor:
-                set_motor(False, "Inconsistencia flotadores")
+                set_motor(False, estado)
 
         elif flotador_alto and flotador_bajo:
-            estado_proceso = "🟦 Tanque lleno"
+            estado = "🟦 Tanque lleno"
             if control_motor:
-                set_motor(False, "Tanque lleno")
+                set_motor(False, estado)
 
         elif not flotador_bajo and not flotador_alto:
             if control_motor:
-                estado_proceso = "💧 Llenando tanque"
+                estado = "💧 Llenando"
             else:
                 if tiempo_ultimo_apagado is None or \
                    (ahora - tiempo_ultimo_apagado) >= RETARDO_REARRANQUE:
-                    estado_proceso = "▶️ Arranque permitido"
+                    estado = "▶️ Arranque permitido"
                     set_motor(True, "Tanque vacío")
                 else:
-                    restante = int(
-                        RETARDO_REARRANQUE - (ahora - tiempo_ultimo_apagado)
-                    )
-                    estado_proceso = f"⏳ Esperando rearranque ({restante}s)"
-
+                    restante = int(RETARDO_REARRANQUE - (ahora - tiempo_ultimo_apagado))
+                    estado = f"⏳ Esperando ({restante}s)"
         else:
-            estado_proceso = "🟡 Nivel medio"
+            estado = "🟡 Nivel medio"
 
-        # ===== CONSOLA =====
         print(
             f"[{ts()}] "
             f"🟢 Bajo: {flotador_bajo} | "
             f"🔵 Alto: {flotador_alto} | "
             f"🎛️ Control: {'ON' if control_motor else 'OFF'} | "
-            f"⚙️ Motor: {'ON' if motor_estado else 'OFF'} | "
-            f"{estado_proceso}"
+            f"🧪 Diagnóstico: {'ON' if modo_diagnostico else 'OFF'} | "
+            f"{estado}"
         )
 
         time.sleep(intervalo_actual)
 
     except Exception as e:
         fallos_modbus += 1
-        intervalo_actual = INTERVALO_ERROR
         modo_diagnostico = True
+        intervalo_actual = INTERVALO_ERROR
 
-        print(
-            f"[{ts()}] ❌ ERROR Modbus TCP ({fallos_modbus}/{MAX_FALLOS_MODBUS}) | "
-            f"Diagnóstico activo ({INTERVALO_ERROR}s)"
-        )
+        print(f"[{ts()}] ❌ ERROR Modbus ({fallos_modbus}) → Diagnóstico activo")
 
         if fallos_modbus >= MAX_FALLOS_MODBUS:
-            print(f"[{ts()}] 🚨 Falla persistente Modbus")
-
             if control_motor:
-                set_motor(False, "Falla comunicación Modbus TCP")
+                set_motor(False, "Falla comunicación")
 
             reiniciar_modbus()
             fallos_modbus = 0
