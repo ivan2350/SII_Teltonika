@@ -132,11 +132,11 @@ def crear_cliente():
 
     return client
 def leer_flotadores(client):
-    lectura = client.read_discrete_inputs(
-        address=0,
-        count=2,
-        unit=ID_TANQUE
-    )
+ lectura = client.read_coils(
+    address=0,
+    count=2,
+    unit=ID_TANQUE
+)
 
     if lectura.isError():
         raise Exception("Error lectura flotadores")
