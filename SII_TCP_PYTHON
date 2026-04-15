@@ -5,9 +5,9 @@ from pymodbus.client import ModbusTcpClient
 
 # ================= CONFIG =================
 
-MODBUS_HOST = "127.0.0.1"
+MODBUS_HOST = "127.0.0.1"            
 MODBUS_PORT = 502
-MODBUS_ID = 32
+MODBUS_ID = 32        
 
 INTERVALO_NORMAL = 60
 INTERVALO_ERROR = 5
@@ -88,6 +88,27 @@ def reiniciar_modbus():
         pass
     time.sleep(2)
 
+# ================= SLEEP INTELIGENTE =================
+
+def sleep_inteligente(segundos):
+    global estado_diag_anterior, modo_diagnostico, tiempo_inicio_diag
+
+    for _ in range(segundos):
+        time.sleep(1)
+
+        estado_actual = leer_di()
+
+        if estado_diag_anterior is None:
+            estado_diag_anterior = estado_actual
+
+        # DETECCIÓN INMEDIATA DE CAMBIO
+        if estado_actual != estado_diag_anterior:
+            modo_diagnostico = True
+            tiempo_inicio_diag = time.time()
+            print(f"[{ts()}] 🧪 DIAGNÓSTICO ACTIVADO (instantáneo)")
+
+        estado_diag_anterior = estado_actual
+
 # ================= INICIO =================
 
 print(f"[{ts()}] 🚀 Sistema iniciado")
@@ -96,7 +117,7 @@ while True:
     try:
         ahora = time.time()
 
-        # ===== 1. DETECCIÓN INMEDIATA (ANTES DE TODO) =====
+        # ===== DETECCIÓN INMEDIATA =====
         estado_actual = leer_di()
 
         if estado_diag_anterior is None:
@@ -109,7 +130,7 @@ while True:
 
         estado_diag_anterior = estado_actual
 
-        # ===== 2. CONTROL DE TIEMPO =====
+        # ===== CONTROL DE TIEMPO =====
         tiempo_restante = 0
 
         if modo_diagnostico and tiempo_inicio_diag:
@@ -125,11 +146,11 @@ while True:
         if not modo_diagnostico:
             intervalo_actual = INTERVALO_NORMAL
 
-        # ===== 3. MODBUS =====
+        # ===== MODBUS =====
         flotador_bajo, flotador_alto = leer_flotadores()
         fallos_modbus = 0
 
-        # ===== 4. LÓGICA =====
+        # ===== LÓGICA =====
         if flotador_alto and not flotador_bajo:
             estado = "⚠️ Inconsistencia"
             if control_motor:
@@ -154,7 +175,7 @@ while True:
         else:
             estado = "🟡 Nivel medio"
 
-        # ===== 5. IMPRESIÓN =====
+        # ===== PRINT =====
         if modo_diagnostico:
             print(
                 f"[{ts()}] "
@@ -174,7 +195,8 @@ while True:
                 f"{estado}"
             )
 
-        time.sleep(intervalo_actual)
+        # ===== ESPERA INTELIGENTE =====
+        sleep_inteligente(intervalo_actual)
 
     except Exception as e:
         fallos_modbus += 1
@@ -191,4 +213,4 @@ while True:
             reiniciar_modbus()
             fallos_modbus = 0
 
-        time.sleep(intervalo_actual)
+        sleep_inteligente(intervalo_actual)
