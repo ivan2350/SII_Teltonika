@@ -30,7 +30,7 @@ intervalo_actual = INTERVALO_NORMAL
 modo_diagnostico = False
 tiempo_inicio_diag = None
 
-estado_diag_anterior = None  # para detectar flanco
+estado_diag_anterior = None
 
 client = ModbusTcpClient(MODBUS_HOST, port=MODBUS_PORT, timeout=2)
 
@@ -96,35 +96,40 @@ while True:
     try:
         ahora = time.time()
 
-        # ===== DETECCIÓN DE FLANCO =====
-        estado_diag_actual = leer_di()
+        # ===== 1. DETECCIÓN INMEDIATA (ANTES DE TODO) =====
+        estado_actual = leer_di()
 
         if estado_diag_anterior is None:
-            estado_diag_anterior = estado_diag_actual
+            estado_diag_anterior = estado_actual
 
-        if estado_diag_actual != estado_diag_anterior:
-            # FLANCO DETECTADO
+        if estado_actual != estado_diag_anterior:
             modo_diagnostico = True
             tiempo_inicio_diag = ahora
+            print(f"[{ts()}] 🧪 DIAGNÓSTICO ACTIVADO (cambio detectado)")
 
-            print(f"[{ts()}] 🧪 MODO DIAGNÓSTICO ACTIVADO (por cambio de entrada)")
+        estado_diag_anterior = estado_actual
 
-        estado_diag_anterior = estado_diag_actual
+        # ===== 2. CONTROL DE TIEMPO =====
+        tiempo_restante = 0
 
-        # ===== CONTROL DE TIEMPO DIAGNÓSTICO =====
         if modo_diagnostico and tiempo_inicio_diag:
-            if ahora - tiempo_inicio_diag >= TIEMPO_DIAGNOSTICO:
+            tiempo_restante = int(TIEMPO_DIAGNOSTICO - (ahora - tiempo_inicio_diag))
+
+            if tiempo_restante <= 0:
                 modo_diagnostico = False
-                print(f"[{ts()}] 🟢 MODO DIAGNÓSTICO FINALIZADO (1 hora)")
+                tiempo_inicio_diag = None
+                print(f"[{ts()}] 🟢 DIAGNÓSTICO FINALIZADO (1 hora)")
+            else:
+                intervalo_actual = INTERVALO_ERROR
 
-        # ===== LECTURA MODBUS =====
+        if not modo_diagnostico:
+            intervalo_actual = INTERVALO_NORMAL
+
+        # ===== 3. MODBUS =====
         flotador_bajo, flotador_alto = leer_flotadores()
-
         fallos_modbus = 0
 
-        intervalo_actual = INTERVALO_ERROR if modo_diagnostico else INTERVALO_NORMAL
-
-        # ===== LÓGICA =====
+        # ===== 4. LÓGICA =====
         if flotador_alto and not flotador_bajo:
             estado = "⚠️ Inconsistencia"
             if control_motor:
@@ -149,20 +154,32 @@ while True:
         else:
             estado = "🟡 Nivel medio"
 
-        print(
-            f"[{ts()}] "
-            f"🟢 Bajo: {flotador_bajo} | "
-            f"🔵 Alto: {flotador_alto} | "
-            f"🎛️ Control: {'ON' if control_motor else 'OFF'} | "
-            f"🧪 Diagnóstico: {'ON' if modo_diagnostico else 'OFF'} | "
-            f"{estado}"
-        )
+        # ===== 5. IMPRESIÓN =====
+        if modo_diagnostico:
+            print(
+                f"[{ts()}] "
+                f"🟢 Bajo: {flotador_bajo} | "
+                f"🔵 Alto: {flotador_alto} | "
+                f"🎛️ Control: {'ON' if control_motor else 'OFF'} | "
+                f"🧪 Diagnóstico: ON ({tiempo_restante}s restantes) | "
+                f"{estado}"
+            )
+        else:
+            print(
+                f"[{ts()}] "
+                f"🟢 Bajo: {flotador_bajo} | "
+                f"🔵 Alto: {flotador_alto} | "
+                f"🎛️ Control: {'ON' if control_motor else 'OFF'} | "
+                f"🧪 Diagnóstico: OFF | "
+                f"{estado}"
+            )
 
         time.sleep(intervalo_actual)
 
     except Exception as e:
         fallos_modbus += 1
         modo_diagnostico = True
+        tiempo_inicio_diag = time.time()
         intervalo_actual = INTERVALO_ERROR
 
         print(f"[{ts()}] ❌ ERROR Modbus ({fallos_modbus}) → Diagnóstico activo")
