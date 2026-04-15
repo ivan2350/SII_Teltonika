@@ -109,18 +109,28 @@ def procesar_interruptor_diagnostico():
 
 # ================= MODBUS =================
 
+from pymodbus.client import ModbusSerialClient
+
 def crear_cliente():
-    return ModbusSerialClient(
-        method="rtu",
-        port="/dev/rs485",
+    client = ModbusSerialClient(
+        method='rtu',
+        port='/dev/rs485',
         baudrate=9600,
         bytesize=8,
         parity='N',
         stopbits=1,
-        timeout=2,
-        strict=False
+        timeout=2
     )
 
+    client.connect()
+
+    # 🔴 FORZAR CONTROL RS485
+    try:
+        client.socket.rts = True
+    except:
+        pass
+
+    return client
 def leer_flotadores(client):
     lectura = client.read_discrete_inputs(
         address=0,
