@@ -1,0 +1,12 @@
+from pymodbus.client import ModbusTcpClient
+
+client = ModbusTcpClient("127.0.0.1", port=502)
+
+client.connect()
+
+# 🔥 ESTA ES LA BUENA
+rr = client.read_discrete_inputs(0, 1, unit=1)
+
+print("Resultado:", rr.bits if rr else "Error")
+
+client.close()
