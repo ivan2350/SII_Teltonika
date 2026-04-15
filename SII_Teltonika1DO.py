@@ -114,6 +114,9 @@ def crear_cliente():
         method="rtu",
         port=MODBUS_PORT,
         baudrate=BAUDRATE,
+        bytesize=8,
+        parity='N',   # 👈 CLAVE
+        stopbits=1,
         timeout=1
     )
 
