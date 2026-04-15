@@ -5,9 +5,9 @@ from pymodbus.client import ModbusTcpClient
 
 # ================= CONFIG =================
 
-MODBUS_HOST = "127.0.0.1"            
+MODBUS_HOST = "127.0.0.1"
 MODBUS_PORT = 502
-MODBUS_ID = 32        
+MODBUS_ID = 32
 
 INTERVALO_NORMAL = 60
 INTERVALO_ERROR = 5
@@ -31,6 +31,7 @@ modo_diagnostico = False
 tiempo_inicio_diag = None
 
 estado_diag_anterior = None
+estado_bloqueo_diag = None  # 🔥 CLAVE
 
 client = ModbusTcpClient(MODBUS_HOST, port=MODBUS_PORT, timeout=2)
 
@@ -91,7 +92,7 @@ def reiniciar_modbus():
 # ================= SLEEP INTELIGENTE =================
 
 def sleep_inteligente(segundos):
-    global estado_diag_anterior, modo_diagnostico, tiempo_inicio_diag
+    global estado_diag_anterior, modo_diagnostico, tiempo_inicio_diag, estado_bloqueo_diag
 
     for _ in range(segundos):
         time.sleep(1)
@@ -101,11 +102,17 @@ def sleep_inteligente(segundos):
         if estado_diag_anterior is None:
             estado_diag_anterior = estado_actual
 
-        # DETECCIÓN INMEDIATA DE CAMBIO
         if estado_actual != estado_diag_anterior:
-            modo_diagnostico = True
-            tiempo_inicio_diag = time.time()
-            print(f"[{ts()}] 🧪 DIAGNÓSTICO ACTIVADO (instantáneo)")
+            if not modo_diagnostico:
+
+                if estado_bloqueo_diag is None or estado_actual != estado_bloqueo_diag:
+                    modo_diagnostico = True
+                    tiempo_inicio_diag = time.time()
+                    print(f"[{ts()}] 🧪 DIAGNÓSTICO ACTIVADO (instantáneo)")
+                else:
+                    print(f"[{ts()}] 🔒 Cambio ignorado (bloqueado)")
+            else:
+                print(f"[{ts()}] 🔁 Cambio ignorado (diagnóstico activo)")
 
         estado_diag_anterior = estado_actual
 
@@ -117,33 +124,43 @@ while True:
     try:
         ahora = time.time()
 
-        # ===== DETECCIÓN INMEDIATA =====
+        # ===== DETECCIÓN PRINCIPAL =====
         estado_actual = leer_di()
 
         if estado_diag_anterior is None:
             estado_diag_anterior = estado_actual
 
         if estado_actual != estado_diag_anterior:
-            modo_diagnostico = True
-            tiempo_inicio_diag = ahora
-            print(f"[{ts()}] 🧪 DIAGNÓSTICO ACTIVADO (cambio detectado)")
+            if not modo_diagnostico:
+
+                if estado_bloqueo_diag is None or estado_actual != estado_bloqueo_diag:
+                    modo_diagnostico = True
+                    tiempo_inicio_diag = ahora
+                    intervalo_actual = INTERVALO_ERROR
+
+                    print(f"[{ts()}] 🧪 DIAGNÓSTICO ACTIVADO (flanco válido)")
+                else:
+                    print(f"[{ts()}] 🔒 Cambio ignorado (esperando nuevo estado)")
+            else:
+                print(f"[{ts()}] 🔁 Cambio ignorado (diagnóstico activo)")
 
         estado_diag_anterior = estado_actual
 
-        # ===== CONTROL DE TIEMPO =====
-        tiempo_restante = 0
-
+        # ===== CONTROL TIEMPO DIAGNÓSTICO =====
         if modo_diagnostico and tiempo_inicio_diag:
             tiempo_restante = int(TIEMPO_DIAGNOSTICO - (ahora - tiempo_inicio_diag))
 
             if tiempo_restante <= 0:
                 modo_diagnostico = False
                 tiempo_inicio_diag = None
-                print(f"[{ts()}] 🟢 DIAGNÓSTICO FINALIZADO (1 hora)")
+
+                estado_bloqueo_diag = estado_actual
+
+                print(f"[{ts()}] 🟢 DIAGNÓSTICO FINALIZADO → esperando cambio de estado")
             else:
                 intervalo_actual = INTERVALO_ERROR
-
-        if not modo_diagnostico:
+        else:
+            tiempo_restante = 0
             intervalo_actual = INTERVALO_NORMAL
 
         # ===== MODBUS =====
@@ -195,7 +212,6 @@ while True:
                 f"{estado}"
             )
 
-        # ===== ESPERA INTELIGENTE =====
         sleep_inteligente(intervalo_actual)
 
     except Exception as e:
