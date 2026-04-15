@@ -31,7 +31,7 @@ modo_diagnostico = False
 tiempo_inicio_diag = None
 
 estado_diag_anterior = None
-estado_bloqueo_diag = None  # 🔥 CLAVE
+estado_bloqueo_diag = None
 
 client = ModbusTcpClient(MODBUS_HOST, port=MODBUS_PORT, timeout=2)
 
@@ -108,7 +108,11 @@ def sleep_inteligente(segundos):
                 if estado_bloqueo_diag is None or estado_actual != estado_bloqueo_diag:
                     modo_diagnostico = True
                     tiempo_inicio_diag = time.time()
+
                     print(f"[{ts()}] 🧪 DIAGNÓSTICO ACTIVADO (instantáneo)")
+
+                    estado_diag_anterior = estado_actual
+                    return   # 🔥 rompe el sleep inmediatamente
                 else:
                     print(f"[{ts()}] 🔒 Cambio ignorado (bloqueado)")
             else:
@@ -139,6 +143,9 @@ while True:
                     intervalo_actual = INTERVALO_ERROR
 
                     print(f"[{ts()}] 🧪 DIAGNÓSTICO ACTIVADO (flanco válido)")
+
+                    estado_diag_anterior = estado_actual
+                    continue   # 🔥 reinicia ciclo inmediatamente
                 else:
                     print(f"[{ts()}] 🔒 Cambio ignorado (esperando nuevo estado)")
             else:
