@@ -5,13 +5,13 @@ from pymodbus.client import ModbusTcpClient
 
 # ================= CONFIGURACIÓN =================
 
-MODBUS_HOST = "127.0.0.1"                
-MODBUS_PORT = 502                
-MODBUS_ID = 32   # ID del Ebyte
+MODBUS_HOST = "127.0.0.1"
+MODBUS_PORT = 502
+MODBUS_ID = 32
 
-INTERVALO_NORMAL = 60                            
-INTERVALO_ERROR = 5                
-RETARDO_REARRANQUE = 180        
+INTERVALO_NORMAL = 60
+INTERVALO_ERROR = 5
+RETARDO_REARRANQUE = 180
 MAX_FALLOS_MODBUS = 30
 
 DO_MOTOR = "ioman.gpio.dio0"
@@ -26,6 +26,7 @@ tiempo_ultimo_apagado = None
 fallos_modbus = 0
 estado_proceso = "Inicializando"
 intervalo_actual = INTERVALO_NORMAL
+modo_diagnostico = False
 
 client = ModbusTcpClient(MODBUS_HOST, port=MODBUS_PORT, timeout=2)
 
@@ -77,17 +78,30 @@ def leer_flotadores():
 
     return rr.bits[0], rr.bits[1]
 
+def reiniciar_modbus():
+    print(f"[{ts()}] 🔄 Reiniciando conexión Modbus TCP...")
+    try:
+        client.close()
+    except:
+        pass
+    time.sleep(2)
+
 # ================= INICIO =================
 
 print(f"[{ts()}] 🚀 Sistema Pozo–Tanque iniciado (Modbus TCP)")
 
 while True:
     try:
-        # ===== LECTURA MODBUS =====
+        # ===== LECTURA =====
         flotador_bajo, flotador_alto = leer_flotadores()
+
+        # ===== RECUPERACIÓN =====
+        if modo_diagnostico:
+            print(f"[{ts()}] 🟢 Comunicación Modbus recuperada")
 
         fallos_modbus = 0
         intervalo_actual = INTERVALO_NORMAL
+        modo_diagnostico = False
 
         # ===== ESTADO MOTOR =====
         motor_estado = leer_motor_estado()
@@ -136,22 +150,20 @@ while True:
     except Exception as e:
         fallos_modbus += 1
         intervalo_actual = INTERVALO_ERROR
+        modo_diagnostico = True
 
         print(
-            f"[{ts()}] ❌ ERROR Modbus TCP ({fallos_modbus}/{MAX_FALLOS_MODBUS})"
+            f"[{ts()}] ❌ ERROR Modbus TCP ({fallos_modbus}/{MAX_FALLOS_MODBUS}) | "
+            f"Diagnóstico activo ({INTERVALO_ERROR}s)"
         )
 
         if fallos_modbus >= MAX_FALLOS_MODBUS:
-            estado_proceso = "❌ Falla comunicación Modbus TCP"
+            print(f"[{ts()}] 🚨 Falla persistente Modbus")
+
             if control_motor:
                 set_motor(False, "Falla comunicación Modbus TCP")
 
-            try:
-                client.close()
-            except:
-                pass
-
-            time.sleep(2)
+            reiniciar_modbus()
             fallos_modbus = 0
 
         time.sleep(intervalo_actual)
