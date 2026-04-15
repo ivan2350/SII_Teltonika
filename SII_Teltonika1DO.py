@@ -112,13 +112,13 @@ def procesar_interruptor_diagnostico():
 def crear_cliente():
     return ModbusSerialClient(
         method="rtu",
-        port=MODBUS_PORT,
+        port="/dev/rs485",
         baudrate=9600,
         bytesize=8,
         parity='N',
         stopbits=1,
-        timeout=2,          # 👈 importante
-        strict=False        # 👈 clave para timing RS485
+        timeout=2,
+        strict=False
     )
 
 def leer_flotadores(client):
