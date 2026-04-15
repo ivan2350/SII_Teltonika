@@ -113,11 +113,12 @@ def crear_cliente():
     return ModbusSerialClient(
         method="rtu",
         port=MODBUS_PORT,
-        baudrate=BAUDRATE,
+        baudrate=9600,
         bytesize=8,
-        parity='N',   # 👈 CLAVE
+        parity='N',
         stopbits=1,
-        timeout=1
+        timeout=2,          # 👈 importante
+        strict=False        # 👈 clave para timing RS485
     )
 
 def leer_flotadores(client):
