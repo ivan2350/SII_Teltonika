@@ -1,5 +1,3 @@
-# ESTE CODIGO SE HIZO HACIENDO QUE COMUNIQUE POR TCP SERVER Y DE AHI LEER EL DATO, YA QUE POR PYTHON NO ESTA LEYENDO EL DATO A USAR, ESTO NOS EVITA ERRORES CON ACTUALIZACION DE DRIVERS Y LIBRERIAS DE PYTHON
-
 #!/usr/bin/env python3
 import time
 import subprocess
@@ -7,13 +5,13 @@ from pymodbus.client import ModbusTcpClient
 
 # ================= CONFIGURACIÓN =================
 
-MODBUS_HOST = "127.0.0.1"
-MODBUS_PORT = 502
+MODBUS_HOST = "127.0.0.1"                
+MODBUS_PORT = 502                
 MODBUS_ID = 32   # ID del Ebyte
 
-INTERVALO_NORMAL = 60
-INTERVALO_ERROR = 5
-RETARDO_REARRANQUE = 180
+INTERVALO_NORMAL = 60                            
+INTERVALO_ERROR = 5                
+RETARDO_REARRANQUE = 180        
 MAX_FALLOS_MODBUS = 30
 
 DO_MOTOR = "ioman.gpio.dio0"
